@@ -14,7 +14,7 @@ MEXC_BASE = "https://contract.mexc.com"
 OKX_BASE = "https://www.okx.com"
 BITGET_BASE = "https://api.bitget.com"
 
-# ==================== MEXC DATA ====================
+# ==================== DATA FUNCTIONS ====================
 @st.cache_data(ttl=300)
 def fetch_mexc_tickers():
     try:
@@ -66,7 +66,6 @@ def fetch_mexc_funding(symbol="BTC_USDT"):
     except:
         return None
 
-# ==================== OKX DATA ====================
 @st.cache_data(ttl=300)
 def fetch_okx_taker_volume(ccy="BTC"):
     try:
@@ -88,7 +87,6 @@ def fetch_okx_taker_volume(ccy="BTC"):
     except:
         return pd.DataFrame()
 
-# ==================== BITGET DATA ====================
 @st.cache_data(ttl=300)
 def fetch_bitget_taker(symbol="BTCUSDT"):
     try:
@@ -216,35 +214,50 @@ def generate_signal(price, rsi, macd, funding, cvd, vp, absorption):
             'reasons': reasons, 'entry': entry, 'sl': sl,
             'tp1': tp1, 'tp2': tp2, 'tp3': tp3}
 
-# ==================== MAIN UI ====================
+# ==================== LOAD DATA ====================
 tickers_df = fetch_mexc_tickers()
 
 if tickers_df.empty:
-    st.error("MEXC data fetch nahi ho saka. Thodi der baad try karo.")
+    st.error("MEXC data fetch nahi ho saka. Page refresh karo.")
     st.stop()
 
 sorted_df = tickers_df.sort_values('riseFallRate', ascending=False)
-
-# Sidebar: Coin Selection
-st.sidebar.header("🔍 Coin Select Karo")
 all_symbols = sorted_df['symbol'].tolist()
-default_index = all_symbols.index('BTC_USDT') if 'BTC_USDT' in all_symbols else 0
 
-selected_symbol = st.sidebar.selectbox(
-    "Symbol chuno:",
-    options=all_symbols,
-    index=default_index
-)
+# ==================== COIN SELECTOR (MAIN PAGE, TOP) ====================
+st.markdown("### 🔍 Coin Select Karo")
 
-search_query = st.sidebar.text_input("Ya search karo (e.g. ETH_USDT):", "")
-if search_query and search_query.upper() in all_symbols:
-    selected_symbol = search_query.upper()
+sel_col1, sel_col2 = st.columns([2, 2])
 
-st.sidebar.markdown(f"**Selected: `{selected_symbol}`**")
+with sel_col1:
+    default_index = all_symbols.index('BTC_USDT') if 'BTC_USDT' in all_symbols else 0
+    selected_from_dropdown = st.selectbox(
+        "Dropdown se chuno:",
+        options=all_symbols,
+        index=default_index,
+        key="dropdown_select"
+    )
+
+with sel_col2:
+    search_text = st.text_input("Ya manually likho (jaise ETH_USDT):", key="search_input")
+
+# Decide selected symbol
+if search_text.strip():
+    user_input = search_text.strip().upper()
+    if user_input in all_symbols:
+        selected_symbol = user_input
+    else:
+        st.warning(f"'{user_input}' list mein nahi mila. Dropdown wala use karo.")
+        selected_symbol = selected_from_dropdown
+else:
+    selected_symbol = selected_from_dropdown
+
+st.markdown(f"### ✅ Selected: `{selected_symbol}`")
 base_ccy = selected_symbol.replace("_USDT", "")
 
-# Top Gainers/Losers
+# ==================== TOP GAINERS / LOSERS ====================
 st.header("📈 Top 10 Gainers & Losers (24h)")
+
 col1, col2 = st.columns(2)
 with col1:
     st.subheader("🟢 Top Gainers")
@@ -252,6 +265,7 @@ with col1:
     g.columns = ['Symbol', 'Price', '24h %', 'Volume']
     g['24h %'] = g['24h %'].apply(lambda x: f"+{x:.2f}%")
     st.dataframe(g, use_container_width=True, hide_index=True)
+
 with col2:
     st.subheader("🔴 Top Losers")
     l = sorted_df.tail(10).sort_values('riseFallRate')[['symbol', 'lastPrice', 'riseFallRate', 'volume24']].copy()
@@ -259,20 +273,21 @@ with col2:
     l['24h %'] = l['24h %'].apply(lambda x: f"{x:.2f}%")
     st.dataframe(l, use_container_width=True, hide_index=True)
 
-# Selected Coin Analysis
+# ==================== SELECTED COIN INFO ====================
 st.header(f"🎯 Analysis: {selected_symbol}")
 coin_row = tickers_df[tickers_df['symbol'] == selected_symbol]
 
 if not coin_row.empty:
     coin = coin_row.iloc[0]
-    c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns(2)
     c1.metric("Price", f"${coin['lastPrice']:,.4f}", f"{coin['riseFallRate']:.2f}%")
     c2.metric("24h Volume", f"${coin['volume24']:,.0f}")
 
+# ==================== FETCH DATA FOR SELECTED ====================
 klines = fetch_mexc_klines(selected_symbol, "Min60", 200)
 
 if klines.empty:
-    st.warning(f"{selected_symbol} ka data nahi mila. Koi aur coin try karo.")
+    st.warning(f"{selected_symbol} ka kline data nahi mila.")
     st.stop()
 
 price = klines['close'].iloc[-1]
@@ -293,15 +308,22 @@ else:
 
 sig = generate_signal(price, rsi, macd, funding, cvd, vp, absorption)
 
+# ==================== SIGNAL DISPLAY ====================
 c1, c2, c3 = st.columns(3)
 with c1:
-    if sig['signal'] == 'BUY': st.success(f"🟢 **{sig['signal']}**")
-    elif sig['signal'] == 'SELL': st.error(f"🔴 **{sig['signal']}**")
-    else: st.warning(f"🟡 **{sig['signal']}**")
+    if sig['signal'] == 'BUY':
+        st.success(f"🟢 **{sig['signal']}**")
+    elif sig['signal'] == 'SELL':
+        st.error(f"🔴 **{sig['signal']}**")
+    else:
+        st.warning(f"🟡 **{sig['signal']}**")
     st.metric("Confidence", f"{sig['confidence']}%")
+
 with c2:
     st.metric("Entry", f"${sig['entry']:,.4f}")
-    if sig['sl']: st.metric("Stop Loss", f"${sig['sl']:,.4f}")
+    if sig['sl']:
+        st.metric("Stop Loss", f"${sig['sl']:,.4f}")
+
 with c3:
     if sig['tp1']:
         st.metric("TP1", f"${sig['tp1']:,.4f}")
@@ -309,19 +331,30 @@ with c3:
         st.metric("TP3", f"${sig['tp3']:,.4f}")
 
 with st.expander("📋 Signal Reasons"):
-    for r in sig['reasons']: st.write(f"• {r}")
+    if sig['reasons']:
+        for r in sig['reasons']:
+            st.write(f"• {r}")
+    else:
+        st.write("Koi strong signal reason nahi mila.")
 
+# ==================== INDICATORS ====================
 st.header(f"📊 Indicators ({selected_symbol})")
 i1, i2, i3, i4 = st.columns(4)
 with i1:
-    if rsi: st.metric("RSI (1h)", f"{rsi:.1f}")
+    if rsi:
+        icon = "🔴" if rsi > 70 else ("🟢" if rsi < 30 else "🟡")
+        st.metric(f"{icon} RSI (1h)", f"{rsi:.1f}")
 with i2:
-    if macd: st.metric("MACD", f"{macd['macd']:.4f}", f"Hist: {macd['histogram']:.4f}")
+    if macd:
+        st.metric("MACD", f"{macd['macd']:.4f}", f"Hist: {macd['histogram']:.4f}")
 with i3:
-    if funding is not None: st.metric("Funding Rate", f"{funding:.4f}%")
+    if funding is not None:
+        st.metric("Funding Rate", f"{funding:.4f}%")
 with i4:
-    if cvd is not None: st.metric("CVD (OKX)", f"{cvd:,.0f}")
+    if cvd is not None:
+        st.metric("CVD (OKX)", f"{cvd:,.0f}")
 
+# ==================== VOLUME PROFILE ====================
 st.header(f"📊 Volume Profile ({selected_symbol})")
 if vp:
     v1, v2, v3 = st.columns(3)
@@ -332,6 +365,7 @@ if vp:
 if absorption is not None:
     st.metric("Absorption Ratio", f"{absorption:.2f}")
 
+# ==================== CHART ====================
 st.header(f"📈 {selected_symbol} (1h)")
 fig = go.Figure(data=[go.Candlestick(
     x=klines['time'], open=klines['open'], high=klines['high'],
@@ -344,7 +378,7 @@ if vp:
 fig.update_layout(xaxis_rangeslider_visible=False, height=500, template="plotly_dark")
 st.plotly_chart(fig, use_container_width=True)
 
-# Sidebar Info
+# ==================== SIDEBAR ====================
 st.sidebar.header("✅ Active Parameters")
 st.sidebar.markdown("""
 - Top Gainers/Losers
