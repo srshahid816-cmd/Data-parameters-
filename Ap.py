@@ -14,7 +14,7 @@ MEXC_BASE = "https://contract.mexc.com"
 OKX_BASE = "https://www.okx.com"
 BITGET_BASE = "https://api.bitget.com"
 
-# ==================== DATA FUNCTIONS ====================
+# ==================== DATA FETCH ====================
 @st.cache_data(ttl=300)
 def fetch_mexc_tickers():
     try:
@@ -165,42 +165,128 @@ def calculate_absorption(df):
     except:
         return None
 
-# ==================== SIGNAL ENGINE ====================
+# ==================== SIGNAL ENGINE (PROBABILITY BASED) ====================
 def generate_signal(price, rsi, macd, funding, cvd, vp, absorption):
-    score = 0
+    bull_points = 0
+    bear_points = 0
     reasons = []
+    details = []
 
+    # 1. RSI
     if rsi:
-        if rsi < 30: score += 2; reasons.append("RSI Oversold")
-        elif rsi > 70: score -= 2; reasons.append("RSI Overbought")
+        if rsi < 30:
+            bull_points += 3
+            reasons.append("RSI Oversold (Bullish)")
+            details.append(f"RSI={rsi:.1f} → Strong Buy Signal")
+        elif rsi < 40:
+            bull_points += 1.5
+            reasons.append("RSI Near Oversold")
+            details.append(f"RSI={rsi:.1f} → Mild Bullish")
+        elif rsi > 70:
+            bear_points += 3
+            reasons.append("RSI Overbought (Bearish)")
+            details.append(f"RSI={rsi:.1f} → Strong Sell Signal")
+        elif rsi > 60:
+            bear_points += 1.5
+            reasons.append("RSI Near Overbought")
+            details.append(f"RSI={rsi:.1f} → Mild Bearish")
+        else:
+            details.append(f"RSI={rsi:.1f} → Neutral")
 
+    # 2. MACD
     if macd:
         if macd['histogram'] > 0 and macd['macd'] > macd['signal']:
-            score += 1; reasons.append("MACD Bullish")
+            bull_points += 2
+            reasons.append("MACD Bullish Crossover")
+            details.append("MACD: Bullish momentum")
         elif macd['histogram'] < 0 and macd['macd'] < macd['signal']:
-            score -= 1; reasons.append("MACD Bearish")
+            bear_points += 2
+            reasons.append("MACD Bearish Crossover")
+            details.append("MACD: Bearish momentum")
+        elif macd['histogram'] > 0:
+            bull_points += 1
+            details.append("MACD: Mild Bullish")
+        elif macd['histogram'] < 0:
+            bear_points += 1
+            details.append("MACD: Mild Bearish")
 
+    # 3. Funding Rate
     if funding is not None:
-        if funding > 0.05: score -= 1; reasons.append("High Funding (Longs crowded)")
-        elif funding < -0.05: score += 1; reasons.append("Negative Funding (Shorts crowded)")
+        if funding > 0.05:
+            bear_points += 2
+            reasons.append("High Funding (Longs Crowded)")
+            details.append(f"Funding={funding:.4f}% → Crowded Longs (Bearish)")
+        elif funding > 0.02:
+            bear_points += 1
+            details.append(f"Funding={funding:.4f}% → Mild Long Bias")
+        elif funding < -0.05:
+            bull_points += 2
+            reasons.append("Negative Funding (Shorts Crowded)")
+            details.append(f"Funding={funding:.4f}% → Crowded Shorts (Bullish)")
+        elif funding < -0.02:
+            bull_points += 1
+            details.append(f"Funding={funding:.4f}% → Mild Short Bias")
+        else:
+            details.append(f"Funding={funding:.4f}% → Neutral")
 
+    # 4. CVD
     if cvd is not None:
-        if cvd > 0: score += 1; reasons.append("Buyers Dominant (CVD+)")
-        else: score -= 1; reasons.append("Sellers Dominant (CVD-)")
+        if cvd > 0:
+            bull_points += 2
+            reasons.append("Buyers Dominant (CVD+)")
+            details.append(f"CVD={cvd:,.0f} → Buyers in control")
+        else:
+            bear_points += 2
+            reasons.append("Sellers Dominant (CVD-)")
+            details.append(f"CVD={cvd:,.0f} → Sellers in control")
 
+    # 5. Volume Profile
     if vp and price:
-        if price < vp['VAL']: score += 1; reasons.append("Below Value Area (Oversold)")
-        elif price > vp['VAH']: score -= 1; reasons.append("Above Value Area (Overbought)")
+        if price < vp['VAL']:
+            bull_points += 2
+            reasons.append("Below Value Area (Oversold)")
+            details.append("Price below VAL → Mean reversion bullish")
+        elif price > vp['VAH']:
+            bear_points += 2
+            reasons.append("Above Value Area (Overbought)")
+            details.append("Price above VAH → Mean reversion bearish")
+        elif price < vp['POC']:
+            bull_points += 0.5
+            details.append("Below POC → Slight bullish bias")
+        else:
+            bear_points += 0.5
+            details.append("Above POC → Slight bearish bias")
 
-    if absorption and absorption > 1.5:
-        reasons.append("High Absorption (Institutional)")
+    # 6. Absorption
+    if absorption is not None and absorption > 1.5:
+        reasons.append("High Absorption (Institutional Activity)")
+        details.append(f"Absorption={absorption:.2f} → Watch for breakout")
 
-    if score >= 3:
-        signal, confidence = "BUY", min(95, 50 + score * 8)
-    elif score <= -3:
-        signal, confidence = "SELL", min(95, 50 + abs(score) * 8)
+    # ==================== PROBABILITY ====================
+    total = bull_points + bear_points
+    if total == 0:
+        buy_prob, sell_prob, hold_prob = 33.3, 33.3, 33.4
     else:
-        signal, confidence = "WAIT / HOLD", 40 + abs(score) * 5
+        buy_prob = (bull_points / total) * 100
+        sell_prob = (bear_points / total) * 100
+        hold_prob = max(0, 100 - buy_prob - sell_prob)
+
+    if buy_prob > sell_prob and buy_prob > 50:
+        buy_prob = min(95, buy_prob + 10)
+        sell_prob = max(5, sell_prob - 5)
+    elif sell_prob > buy_prob and sell_prob > 50:
+        sell_prob = min(95, sell_prob + 10)
+        buy_prob = max(5, buy_prob - 5)
+
+    hold_prob = max(0, 100 - buy_prob - sell_prob)
+
+    # ==================== FINAL SIGNAL ====================
+    if buy_prob >= 55:
+        signal, confidence = "BUY", buy_prob
+    elif sell_prob >= 55:
+        signal, confidence = "SELL", sell_prob
+    else:
+        signal, confidence = "WAIT / HOLD", hold_prob
 
     entry = price
     if signal == "BUY":
@@ -210,44 +296,41 @@ def generate_signal(price, rsi, macd, funding, cvd, vp, absorption):
     else:
         sl = tp1 = tp2 = tp3 = None
 
-    return {'signal': signal, 'confidence': confidence, 'score': score,
-            'reasons': reasons, 'entry': entry, 'sl': sl,
-            'tp1': tp1, 'tp2': tp2, 'tp3': tp3}
+    return {
+        'signal': signal, 'confidence': confidence,
+        'buy_prob': round(buy_prob, 1), 'sell_prob': round(sell_prob, 1), 'hold_prob': round(hold_prob, 1),
+        'bull_points': round(bull_points, 1), 'bear_points': round(bear_points, 1),
+        'reasons': reasons, 'details': details,
+        'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3
+    }
 
-# ==================== LOAD DATA ====================
+# ==================== MAIN ====================
 tickers_df = fetch_mexc_tickers()
 
 if tickers_df.empty:
-    st.error("MEXC data fetch nahi ho saka. Page refresh karo.")
+    st.error("MEXC data fetch nahi ho saka. Refresh karo.")
     st.stop()
 
 sorted_df = tickers_df.sort_values('riseFallRate', ascending=False)
 all_symbols = sorted_df['symbol'].tolist()
 
-# ==================== COIN SELECTOR (MAIN PAGE, TOP) ====================
+# Coin Selector
 st.markdown("### 🔍 Coin Select Karo")
-
 sel_col1, sel_col2 = st.columns([2, 2])
 
 with sel_col1:
     default_index = all_symbols.index('BTC_USDT') if 'BTC_USDT' in all_symbols else 0
-    selected_from_dropdown = st.selectbox(
-        "Dropdown se chuno:",
-        options=all_symbols,
-        index=default_index,
-        key="dropdown_select"
-    )
+    selected_from_dropdown = st.selectbox("Dropdown se chuno:", options=all_symbols, index=default_index, key="dropdown_select")
 
 with sel_col2:
     search_text = st.text_input("Ya manually likho (jaise ETH_USDT):", key="search_input")
 
-# Decide selected symbol
 if search_text.strip():
     user_input = search_text.strip().upper()
     if user_input in all_symbols:
         selected_symbol = user_input
     else:
-        st.warning(f"'{user_input}' list mein nahi mila. Dropdown wala use karo.")
+        st.warning(f"'{user_input}' list mein nahi mila. Dropdown use karo.")
         selected_symbol = selected_from_dropdown
 else:
     selected_symbol = selected_from_dropdown
@@ -255,9 +338,8 @@ else:
 st.markdown(f"### ✅ Selected: `{selected_symbol}`")
 base_ccy = selected_symbol.replace("_USDT", "")
 
-# ==================== TOP GAINERS / LOSERS ====================
+# Top Gainers/Losers
 st.header("📈 Top 10 Gainers & Losers (24h)")
-
 col1, col2 = st.columns(2)
 with col1:
     st.subheader("🟢 Top Gainers")
@@ -265,7 +347,6 @@ with col1:
     g.columns = ['Symbol', 'Price', '24h %', 'Volume']
     g['24h %'] = g['24h %'].apply(lambda x: f"+{x:.2f}%")
     st.dataframe(g, use_container_width=True, hide_index=True)
-
 with col2:
     st.subheader("🔴 Top Losers")
     l = sorted_df.tail(10).sort_values('riseFallRate')[['symbol', 'lastPrice', 'riseFallRate', 'volume24']].copy()
@@ -273,21 +354,19 @@ with col2:
     l['24h %'] = l['24h %'].apply(lambda x: f"{x:.2f}%")
     st.dataframe(l, use_container_width=True, hide_index=True)
 
-# ==================== SELECTED COIN INFO ====================
+# Selected Coin Info
 st.header(f"🎯 Analysis: {selected_symbol}")
 coin_row = tickers_df[tickers_df['symbol'] == selected_symbol]
-
 if not coin_row.empty:
     coin = coin_row.iloc[0]
     c1, c2 = st.columns(2)
     c1.metric("Price", f"${coin['lastPrice']:,.4f}", f"{coin['riseFallRate']:.2f}%")
     c2.metric("24h Volume", f"${coin['volume24']:,.0f}")
 
-# ==================== FETCH DATA FOR SELECTED ====================
+# Fetch data
 klines = fetch_mexc_klines(selected_symbol, "Min60", 200)
-
 if klines.empty:
-    st.warning(f"{selected_symbol} ka kline data nahi mila.")
+    st.warning(f"{selected_symbol} ka data nahi mila.")
     st.stop()
 
 price = klines['close'].iloc[-1]
@@ -309,35 +388,62 @@ else:
 sig = generate_signal(price, rsi, macd, funding, cvd, vp, absorption)
 
 # ==================== SIGNAL DISPLAY ====================
-c1, c2, c3 = st.columns(3)
-with c1:
-    if sig['signal'] == 'BUY':
-        st.success(f"🟢 **{sig['signal']}**")
-    elif sig['signal'] == 'SELL':
-        st.error(f"🔴 **{sig['signal']}**")
-    else:
-        st.warning(f"🟡 **{sig['signal']}**")
-    st.metric("Confidence", f"{sig['confidence']}%")
+st.header(f"🎯 Signal for {selected_symbol}")
 
-with c2:
+prob_col1, prob_col2, prob_col3 = st.columns(3)
+with prob_col1:
+    st.metric("🟢 BUY", f"{sig['buy_prob']}%")
+with prob_col2:
+    st.metric("🔴 SELL", f"{sig['sell_prob']}%")
+with prob_col3:
+    st.metric("🟡 HOLD", f"{sig['hold_prob']}%")
+
+prob_chart = go.Figure(go.Bar(
+    x=['BUY', 'SELL', 'HOLD'],
+    y=[sig['buy_prob'], sig['sell_prob'], sig['hold_prob']],
+    marker_color=['#00ff88', '#ff4444', '#ffaa00'],
+    text=[f"{sig['buy_prob']}%", f"{sig['sell_prob']}%", f"{sig['hold_prob']}%"],
+    textposition='auto'
+))
+prob_chart.update_layout(height=250, template="plotly_dark", showlegend=False, yaxis_title="Probability %", yaxis_range=[0, 100])
+st.plotly_chart(prob_chart, use_container_width=True)
+
+final_col1, final_col2 = st.columns([1, 1])
+with final_col1:
+    if sig['signal'] == 'BUY':
+        st.success(f"## 🟢 **{sig['signal']}**")
+    elif sig['signal'] == 'SELL':
+        st.error(f"## 🔴 **{sig['signal']}**")
+    else:
+        st.warning(f"## 🟡 **{sig['signal']}**")
+    st.metric("Confidence", f"{sig['confidence']:.1f}%")
+with final_col2:
     st.metric("Entry", f"${sig['entry']:,.4f}")
     if sig['sl']:
         st.metric("Stop Loss", f"${sig['sl']:,.4f}")
 
-with c3:
-    if sig['tp1']:
-        st.metric("TP1", f"${sig['tp1']:,.4f}")
-        st.metric("TP2", f"${sig['tp2']:,.4f}")
-        st.metric("TP3", f"${sig['tp3']:,.4f}")
+if sig['tp1']:
+    tp_col1, tp_col2, tp_col3 = st.columns(3)
+    tp_col1.metric("TP1", f"${sig['tp1']:,.4f}")
+    tp_col2.metric("TP2", f"${sig['tp2']:,.4f}")
+    tp_col3.metric("TP3", f"${sig['tp3']:,.4f}")
 
-with st.expander("📋 Signal Reasons"):
+with st.expander("📋 Signal Analysis (Parameter by Parameter)"):
+    st.markdown("**Bullish Points:** " + str(sig['bull_points']))
+    st.markdown("**Bearish Points:** " + str(sig['bear_points']))
+    st.markdown("---")
+    st.markdown("**Parameter Breakdown:**")
+    for d in sig['details']:
+        st.write(f"• {d}")
+    st.markdown("---")
+    st.markdown("**Key Reasons:**")
     if sig['reasons']:
         for r in sig['reasons']:
-            st.write(f"• {r}")
+            st.write(f"✅ {r}")
     else:
-        st.write("Koi strong signal reason nahi mila.")
+        st.write("Koi strong reason nahi mila.")
 
-# ==================== INDICATORS ====================
+# Indicators
 st.header(f"📊 Indicators ({selected_symbol})")
 i1, i2, i3, i4 = st.columns(4)
 with i1:
@@ -354,7 +460,7 @@ with i4:
     if cvd is not None:
         st.metric("CVD (OKX)", f"{cvd:,.0f}")
 
-# ==================== VOLUME PROFILE ====================
+# Volume Profile
 st.header(f"📊 Volume Profile ({selected_symbol})")
 if vp:
     v1, v2, v3 = st.columns(3)
@@ -365,7 +471,7 @@ if vp:
 if absorption is not None:
     st.metric("Absorption Ratio", f"{absorption:.2f}")
 
-# ==================== CHART ====================
+# Chart
 st.header(f"📈 {selected_symbol} (1h)")
 fig = go.Figure(data=[go.Candlestick(
     x=klines['time'], open=klines['open'], high=klines['high'],
@@ -378,7 +484,7 @@ if vp:
 fig.update_layout(xaxis_rangeslider_visible=False, height=500, template="plotly_dark")
 st.plotly_chart(fig, use_container_width=True)
 
-# ==================== SIDEBAR ====================
+# Sidebar
 st.sidebar.header("✅ Active Parameters")
 st.sidebar.markdown("""
 - Top Gainers/Losers
@@ -388,7 +494,7 @@ st.sidebar.markdown("""
 - CVD (OKX)
 - Volume Profile
 - Absorption
-- Signal (BUY/SELL/WAIT)
+- Signal (BUY/SELL/WAIT) with Probability
 - Entry / SL / TP1-3
 """)
 st.sidebar.button("🔄 Refresh", on_click=lambda: st.cache_data.clear())
