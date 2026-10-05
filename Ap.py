@@ -10,9 +10,11 @@ st.set_page_config(page_title="Pro Crypto Dashboard", layout="wide")
 st.title("📊 Professional Crypto Futures Dashboard")
 st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Data: MEXC + OKX + Bitget")
 
-# ==================== MEXC TICKERS (US Accessible) ====================
 MEXC_BASE = "https://contract.mexc.com"
+OKX_BASE = "https://www.okx.com"
+BITGET_BASE = "https://api.bitget.com"
 
+# ==================== MEXC DATA ====================
 @st.cache_data(ttl=300)
 def fetch_mexc_tickers():
     try:
@@ -33,7 +35,7 @@ def fetch_mexc_tickers():
 @st.cache_data(ttl=300)
 def fetch_mexc_klines(symbol, interval="Min60", limit=200):
     try:
-        resp = requests.get(f"{MEXC_BASE}/api/v1/contract/kline/{symbol}", 
+        resp = requests.get(f"{MEXC_BASE}/api/v1/contract/kline/{symbol}",
                           params={"interval": interval}, timeout=15)
         resp.raise_for_status()
         data = resp.json()
@@ -65,8 +67,6 @@ def fetch_mexc_funding(symbol="BTC_USDT"):
         return None
 
 # ==================== OKX DATA ====================
-OKX_BASE = "https://www.okx.com"
-
 @st.cache_data(ttl=300)
 def fetch_okx_taker_volume(ccy="BTC"):
     try:
@@ -89,8 +89,6 @@ def fetch_okx_taker_volume(ccy="BTC"):
         return pd.DataFrame()
 
 # ==================== BITGET DATA ====================
-BITGET_BASE = "https://api.bitget.com"
-
 @st.cache_data(ttl=300)
 def fetch_bitget_taker(symbol="BTCUSDT"):
     try:
@@ -227,6 +225,24 @@ if tickers_df.empty:
 
 sorted_df = tickers_df.sort_values('riseFallRate', ascending=False)
 
+# Sidebar: Coin Selection
+st.sidebar.header("🔍 Coin Select Karo")
+all_symbols = sorted_df['symbol'].tolist()
+default_index = all_symbols.index('BTC_USDT') if 'BTC_USDT' in all_symbols else 0
+
+selected_symbol = st.sidebar.selectbox(
+    "Symbol chuno:",
+    options=all_symbols,
+    index=default_index
+)
+
+search_query = st.sidebar.text_input("Ya search karo (e.g. ETH_USDT):", "")
+if search_query and search_query.upper() in all_symbols:
+    selected_symbol = search_query.upper()
+
+st.sidebar.markdown(f"**Selected: `{selected_symbol}`**")
+base_ccy = selected_symbol.replace("_USDT", "")
+
 # Top Gainers/Losers
 st.header("📈 Top 10 Gainers & Losers (24h)")
 col1, col2 = st.columns(2)
@@ -243,104 +259,102 @@ with col2:
     l['24h %'] = l['24h %'].apply(lambda x: f"{x:.2f}%")
     st.dataframe(l, use_container_width=True, hide_index=True)
 
-# BTC/ETH
-st.header("₿ BTC & ETH")
-btc = tickers_df[tickers_df['symbol'] == 'BTC_USDT']
-eth = tickers_df[tickers_df['symbol'] == 'ETH_USDT']
-if not btc.empty:
-    b = btc.iloc[0]
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("BTC", f"${b['lastPrice']:,.2f}", f"{b['riseFallRate']:.2f}%")
-    c2.metric("Volume", f"${b['volume24']:,.0f}")
-    if not eth.empty:
-        e = eth.iloc[0]
-        c3.metric("ETH", f"${e['lastPrice']:,.2f}", f"{e['riseFallRate']:.2f}%")
-        c4.metric("Volume", f"${e['volume24']:,.0f}")
+# Selected Coin Analysis
+st.header(f"🎯 Analysis: {selected_symbol}")
+coin_row = tickers_df[tickers_df['symbol'] == selected_symbol]
 
-# Signal Engine
-st.header("🎯 Signal Engine (BTC_USDT)")
-klines = fetch_mexc_klines("BTC_USDT", "Min60", 200)
-if not klines.empty:
-    price = klines['close'].iloc[-1]
-    rsi = calculate_rsi(klines)
-    macd = calculate_macd(klines)
-    vp = calculate_volume_profile(klines)
-    absorption = calculate_absorption(klines)
-    funding = fetch_mexc_funding("BTC_USDT")
-    okx_cvd = fetch_okx_taker_volume("BTC")
-    cvd = okx_cvd['CVD'].iloc[-1] if not okx_cvd.empty else None
-
-    sig = generate_signal(price, rsi, macd, funding, cvd, vp, absorption)
-
+if not coin_row.empty:
+    coin = coin_row.iloc[0]
     c1, c2, c3 = st.columns(3)
-    with c1:
-        if sig['signal'] == 'BUY': st.success(f"🟢 {sig['signal']}")
-        elif sig['signal'] == 'SELL': st.error(f"🔴 {sig['signal']}")
-        else: st.warning(f"🟡 {sig['signal']}")
-        st.metric("Confidence", f"{sig['confidence']}%")
-    with c2:
-        st.metric("Entry", f"${sig['entry']:,.2f}")
-        if sig['sl']: st.metric("SL", f"${sig['sl']:,.2f}")
-    with c3:
-        if sig['tp1']:
-            st.metric("TP1", f"${sig['tp1']:,.2f}")
-            st.metric("TP2", f"${sig['tp2']:,.2f}")
-            st.metric("TP3", f"${sig['tp3']:,.2f}")
+    c1.metric("Price", f"${coin['lastPrice']:,.4f}", f"{coin['riseFallRate']:.2f}%")
+    c2.metric("24h Volume", f"${coin['volume24']:,.0f}")
 
-    with st.expander("📋 Reasons"):
-        for r in sig['reasons']: st.write(f"• {r}")
+klines = fetch_mexc_klines(selected_symbol, "Min60", 200)
 
-    # Indicators
-    st.header("📊 Indicators")
-    i1, i2, i3, i4 = st.columns(4)
-    with i1:
-        if rsi: st.metric("RSI", f"{rsi:.1f}")
-    with i2:
-        if macd: st.metric("MACD", f"{macd['macd']:.2f}", f"Hist: {macd['histogram']:.2f}")
-    with i3:
-        if funding is not None: st.metric("Funding", f"{funding:.4f}%")
-    with i4:
-        if cvd is not None: st.metric("CVD (OKX)", f"{cvd:,.0f}")
+if klines.empty:
+    st.warning(f"{selected_symbol} ka data nahi mila. Koi aur coin try karo.")
+    st.stop()
 
-    # Volume Profile
-    st.header("📊 Volume Profile")
-    if vp:
-        v1, v2, v3 = st.columns(3)
-        v1.metric("POC", f"${vp['POC']:,.2f}")
-        v2.metric("VAH", f"${vp['VAH']:,.2f}")
-        v3.metric("VAL", f"${vp['VAL']:,.2f}")
+price = klines['close'].iloc[-1]
+rsi = calculate_rsi(klines)
+macd = calculate_macd(klines)
+vp = calculate_volume_profile(klines)
+absorption = calculate_absorption(klines)
+funding = fetch_mexc_funding(selected_symbol)
 
-    # Chart
-    st.header("📈 BTC/USDT (1h)")
-    fig = go.Figure(data=[go.Candlestick(
-        x=klines['time'], open=klines['open'], high=klines['high'],
-        low=klines['low'], close=klines['close']
-    )])
-    if vp:
-        fig.add_hline(y=vp['POC'], line_dash="dash", line_color="yellow")
-        fig.add_hline(y=vp['VAH'], line_dash="dot", line_color="green")
-        fig.add_hline(y=vp['VAL'], line_dash="dot", line_color="red")
-    fig.update_layout(xaxis_rangeslider_visible=False, height=500, template="plotly_dark")
-    st.plotly_chart(fig, use_container_width=True)
+okx_cvd = fetch_okx_taker_volume(base_ccy)
+cvd = None
+if not okx_cvd.empty:
+    cvd = okx_cvd['CVD'].iloc[-1]
+else:
+    bitget_cvd = fetch_bitget_taker(selected_symbol.replace("_", ""))
+    if not bitget_cvd.empty:
+        cvd = bitget_cvd['CVD'].iloc[-1]
 
-# Sidebar
+sig = generate_signal(price, rsi, macd, funding, cvd, vp, absorption)
+
+c1, c2, c3 = st.columns(3)
+with c1:
+    if sig['signal'] == 'BUY': st.success(f"🟢 **{sig['signal']}**")
+    elif sig['signal'] == 'SELL': st.error(f"🔴 **{sig['signal']}**")
+    else: st.warning(f"🟡 **{sig['signal']}**")
+    st.metric("Confidence", f"{sig['confidence']}%")
+with c2:
+    st.metric("Entry", f"${sig['entry']:,.4f}")
+    if sig['sl']: st.metric("Stop Loss", f"${sig['sl']:,.4f}")
+with c3:
+    if sig['tp1']:
+        st.metric("TP1", f"${sig['tp1']:,.4f}")
+        st.metric("TP2", f"${sig['tp2']:,.4f}")
+        st.metric("TP3", f"${sig['tp3']:,.4f}")
+
+with st.expander("📋 Signal Reasons"):
+    for r in sig['reasons']: st.write(f"• {r}")
+
+st.header(f"📊 Indicators ({selected_symbol})")
+i1, i2, i3, i4 = st.columns(4)
+with i1:
+    if rsi: st.metric("RSI (1h)", f"{rsi:.1f}")
+with i2:
+    if macd: st.metric("MACD", f"{macd['macd']:.4f}", f"Hist: {macd['histogram']:.4f}")
+with i3:
+    if funding is not None: st.metric("Funding Rate", f"{funding:.4f}%")
+with i4:
+    if cvd is not None: st.metric("CVD (OKX)", f"{cvd:,.0f}")
+
+st.header(f"📊 Volume Profile ({selected_symbol})")
+if vp:
+    v1, v2, v3 = st.columns(3)
+    v1.metric("POC", f"${vp['POC']:,.4f}")
+    v2.metric("VAH", f"${vp['VAH']:,.4f}")
+    v3.metric("VAL", f"${vp['VAL']:,.4f}")
+
+if absorption is not None:
+    st.metric("Absorption Ratio", f"{absorption:.2f}")
+
+st.header(f"📈 {selected_symbol} (1h)")
+fig = go.Figure(data=[go.Candlestick(
+    x=klines['time'], open=klines['open'], high=klines['high'],
+    low=klines['low'], close=klines['close']
+)])
+if vp:
+    fig.add_hline(y=vp['POC'], line_dash="dash", line_color="yellow", annotation_text="POC")
+    fig.add_hline(y=vp['VAH'], line_dash="dot", line_color="green", annotation_text="VAH")
+    fig.add_hline(y=vp['VAL'], line_dash="dot", line_color="red", annotation_text="VAL")
+fig.update_layout(xaxis_rangeslider_visible=False, height=500, template="plotly_dark")
+st.plotly_chart(fig, use_container_width=True)
+
+# Sidebar Info
 st.sidebar.header("✅ Active Parameters")
 st.sidebar.markdown("""
-**MEXC se:**
-- Tickers / Gainers / Losers
-- Klines / Price
+- Top Gainers/Losers
+- Price / Klines
+- RSI / MACD
 - Funding Rate
-
-**OKX se:**
-- Taker Volume (CVD)
-
-**Calculated:**
-- RSI, MACD
+- CVD (OKX)
 - Volume Profile
 - Absorption
 - Signal (BUY/SELL/WAIT)
 - Entry / SL / TP1-3
 """)
-st.sidebar.header("🚫 Hata Diya")
-st.sidebar.markdown("- ❌ Binance (US blocked)")
 st.sidebar.button("🔄 Refresh", on_click=lambda: st.cache_data.clear())
