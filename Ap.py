@@ -7,7 +7,115 @@ import plotly.graph_objects as go
 from datetime import datetime
 from scipy.signal import argrelextrema
 
-st.set_page_config(page_title="Pro Crypto Dashboard v2", layout="wide")
+st.set_page_config(page_title="Pro Crypto Dashboard + AI", layout="wide")
+
+# ==================== GROQ CHATBOT SETUP ====================
+try:
+    from groq import Groq
+    _groq_ok = True
+except Exception:
+    _groq_ok = False
+
+try:
+    _groq_key = st.secrets.get("GROQ_API_KEY", None)
+except Exception:
+    _groq_key = None
+
+# ==================== MODE SELECTOR ====================
+st.sidebar.markdown("## 🧭 Mode")
+MODE = st.sidebar.radio(
+    "Kaunsa mode?",
+    ["📊 Crypto Dashboard", "🤖 AI Chatbot"],
+    index=0,
+    key="mode_selector"
+)
+
+# ==================== CHATBOT MODE ====================
+if MODE == "🤖 AI Chatbot":
+    st.title("🤖 AI Chatbot")
+
+    if not _groq_ok:
+        st.error("`groq` library install nahi hai. `requirements.txt` mein `groq>=0.11.0` add karo.")
+        st.stop()
+
+    if not _groq_key:
+        st.error("GROQ_API_KEY nahi mila. Streamlit Cloud → Settings → Secrets mein daalo.")
+        st.code('GROQ_API_KEY = "gsk_xxxxxxxxxxxxx"', language="toml")
+        st.stop()
+
+    client = Groq(api_key=_groq_key)
+
+    # Chatbot sidebar settings
+    st.sidebar.markdown("---")
+    st.sidebar.header("⚙️ Chatbot Settings")
+
+    model = st.sidebar.selectbox(
+        "Model",
+        [
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "mixtral-8x7b-32768",
+            "gemma2-9b-it"
+        ],
+        index=0
+    )
+
+    temp = st.sidebar.slider("Temperature (creativity)", 0.0, 1.5, 0.7, 0.1)
+    max_tok = st.sidebar.slider("Max Response Length", 256, 4096, 1024, 256)
+
+    sys_prompt = st.sidebar.text_area(
+        "System Prompt (AI ka role)",
+        value="You are a helpful AI assistant. Answer clearly and concisely.",
+        height=100
+    )
+
+    if st.sidebar.button("🗑️ Clear Chat"):
+        st.session_state.messages = []
+        st.rerun()
+
+    # Init chat history
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+    # Display chat history
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    # Chat input
+    if prompt := st.chat_input("Apna sawal likho..."):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant"):
+            placeholder = st.empty()
+            full_response = ""
+            try:
+                stream = client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "system", "content": sys_prompt}]
+                    + [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages],
+                    temperature=temp,
+                    max_tokens=max_tok,
+                    stream=True,
+                )
+                for chunk in stream:
+                    if chunk.choices[0].delta.content:
+                        full_response += chunk.choices[0].delta.content
+                        placeholder.markdown(full_response + "▌")
+                placeholder.markdown(full_response)
+            except Exception as e:
+                full_response = f"Error: {e}"
+                placeholder.error(full_response)
+
+        st.session_state.messages.append({"role": "assistant", "content": full_response})
+
+    st.sidebar.markdown("---")
+    st.sidebar.caption("Powered by Groq (free tier)")
+    st.stop()  # Chatbot mode mein dashboard code na chale
+
+# ==================== DASHBOARD MODE ====================
 st.title("📊 Professional Crypto Dashboard v2")
 st.caption(f"Last: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | MEXC + OKX + Bitget | MTF + SMC")
 
@@ -170,7 +278,7 @@ def get_trend(df, k=3):
     except:
         return 0, "N/A"
 
-# ==================== MARKET STRUCTURE (BoS / CHoCH) ====================
+# ==================== MARKET STRUCTURE ====================
 def detect_ms(df, k=3):
     res = {'bos': 0, 'choch': 0, 'status': 'No Structure'}
     if df is None or len(df) < 50: return res
@@ -237,7 +345,7 @@ def detect_fvg(df, lookback=50):
     except:
         return []
 
-# ==================== LIQUIDATION ZONES (Estimated) ====================
+# ==================== LIQUIDATION ZONES ====================
 def liq_zones(df, k=5):
     zones = []
     if df is None or len(df) < 30: return zones
@@ -259,7 +367,6 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
     bull = 0; bear = 0
     reasons = []; details = []
 
-    # 1. RSI
     if rsi:
         if rsi < 30: bull += 3; reasons.append("RSI Oversold"); details.append(f"RSI={rsi:.1f} → Buy")
         elif rsi < 40: bull += 1.5; details.append(f"RSI={rsi:.1f} → Mild Bullish")
@@ -267,7 +374,6 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
         elif rsi > 60: bear += 1.5; details.append(f"RSI={rsi:.1f} → Mild Bearish")
         else: details.append(f"RSI={rsi:.1f} → Neutral")
 
-    # 2. MACD
     if macd:
         if macd['hist'] > 0 and macd['macd'] > macd['signal']:
             bull += 2; reasons.append("MACD Bullish"); details.append("MACD: Bullish")
@@ -276,35 +382,29 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
         elif macd['hist'] > 0: bull += 1; details.append("MACD: Mild Bullish")
         elif macd['hist'] < 0: bear += 1; details.append("MACD: Mild Bearish")
 
-    # 3. Funding
     if funding is not None:
         if funding > 0.05: bear += 2; reasons.append("High Funding"); details.append(f"Funding={funding:.4f}% → Bearish")
         elif funding < -0.05: bull += 2; reasons.append("Neg Funding"); details.append(f"Funding={funding:.4f}% → Bullish")
         else: details.append(f"Funding={funding:.4f}% → Neutral")
 
-    # 4. CVD
     if cvd is not None:
         if cvd > 0: bull += 2; reasons.append("Buyers (CVD+)"); details.append(f"CVD={cvd:,.0f} → Buyers")
         else: bear += 2; reasons.append("Sellers (CVD-)"); details.append(f"CVD={cvd:,.0f} → Sellers")
 
-    # 5. VP
     if vp and price:
         if price < vp['VAL']: bull += 2; reasons.append("Below VA"); details.append("Price<VAL → Bullish")
         elif price > vp['VAH']: bear += 2; reasons.append("Above VA"); details.append("Price>VAH → Bearish")
         elif price < vp['POC']: bull += 0.5; details.append("Price<POC → Slight Bullish")
         else: bear += 0.5; details.append("Price>POC → Slight Bearish")
 
-    # 6. Absorption
     if absorb and absorb > 1.5:
         reasons.append("High Absorption"); details.append(f"Absorption={absorb:.2f}")
 
-    # 7. OI
     if oi_ch is not None:
         if oi_ch > 2: bull += 1.5; reasons.append("OI Increasing"); details.append(f"OI +{oi_ch:.2f}%")
         elif oi_ch < -2: bear += 1.5; reasons.append("OI Decreasing"); details.append(f"OI {oi_ch:.2f}%")
         else: details.append(f"OI {oi_ch:.2f}% (Neutral)")
 
-    # 8. MTF Alignment
     t15 = tf.get('15m', (0, 'N/A'))[0]
     t1h = tf.get('1H', (0, 'N/A'))[0]
     t4h = tf.get('4H', (0, 'N/A'))[0]
@@ -315,14 +415,12 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
     else:
         details.append(f"MTF: 15m={tf['15m'][1]} 1H={tf['1H'][1]} 4H={tf['4H'][1]}")
 
-    # 9. Market Structure
     if ms['bos'] == 1: bull += 2.5; reasons.append("Bullish BoS"); details.append(ms['status'])
     elif ms['bos'] == -1: bear += 2.5; reasons.append("Bearish BoS"); details.append(ms['status'])
     elif ms['choch'] == 1: bull += 2; reasons.append("Bullish CHoCH"); details.append(ms['status'])
     elif ms['choch'] == -1: bear += 2; reasons.append("Bearish CHoCH"); details.append(ms['status'])
     else: details.append(f"Structure: {ms['status']}")
 
-    # 10. Order Blocks
     if obs and price:
         in_bull_ob = any(o['type']=='bullish' and o['bottom'] <= price <= o['top'] for o in obs)
         in_bear_ob = any(o['type']=='bearish' and o['bottom'] <= price <= o['top'] for o in obs)
@@ -330,14 +428,12 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
         if in_bear_ob: bear += 2; reasons.append("In Bearish OB"); details.append("Price inside Bearish OB")
         if not in_bull_ob and not in_bear_ob: details.append("Not in OB")
 
-    # 11. FVG
     if fvgs and price:
         in_bfvg = any(f['type']=='bullish' and f['bottom'] <= price <= f['top'] for f in fvgs)
         in_sfvg = any(f['type']=='bearish' and f['bottom'] <= price <= f['top'] for f in fvgs)
         if in_bfvg: bull += 1.5; reasons.append("In Bullish FVG"); details.append("Price in Bullish FVG")
         if in_sfvg: bear += 1.5; reasons.append("In Bearish FVG"); details.append("Price in Bearish FVG")
 
-    # 12. Liquidation Zones
     if liqz and price:
         for z in liqz:
             if abs(price - z['price'])/price < 0.005:
@@ -346,7 +442,6 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
                 else:
                     bear += 1; reasons.append("Near Buy-Side Liq"); details.append(f"Buy-side liq @ ${z['price']:,.4f}")
 
-    # Probability
     total = bull + bear
     if total == 0:
         bp, sp, hp = 33.3, 33.3, 33.4
@@ -375,7 +470,7 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
             'bull': round(bull,1), 'bear': round(bear,1), 'reasons': reasons, 'details': details,
             'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3}
 
-# ==================== MAIN ====================
+# ==================== MAIN DASHBOARD ====================
 tickers = fetch_tickers()
 if tickers.empty:
     st.error("MEXC data fetch nahi hua. Refresh karo.")
@@ -425,7 +520,6 @@ if not crow.empty:
     m1.metric("Price", f"${co['lastPrice']:,.4f}", f"{co['riseFallRate']:.2f}%")
     m2.metric("24h Volume", f"${co['volume24']:,.0f}")
 
-# Fetch all data
 klines_15m = fetch_klines(SYM, "Min15", 200)
 klines_1h = fetch_klines(SYM, "Min60", 200)
 klines_4h = fetch_klines(SYM, "Hour4", 200)
@@ -448,14 +542,12 @@ oi_ch = None
 if not oi_df.empty and len(oi_df) > 1:
     oi_ch = ((oi_df['oi'].iloc[-1] - oi_df['oi'].iloc[0]) / oi_df['oi'].iloc[0]) * 100
 
-# MTF trends
 tf_trends = {
     '15m': get_trend(klines_15m),
     '1H': get_trend(klines_1h),
     '4H': get_trend(klines_4h),
 }
 
-# SMC
 ms = detect_ms(klines_1h)
 obs = detect_obs(klines_1h)
 fvgs = detect_fvg(klines_1h)
@@ -464,7 +556,7 @@ liqz = liq_zones(klines_1h)
 sig = make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch,
                   tf_trends, ms, obs, fvgs, liqz, atr)
 
-# ==================== DISPLAY ====================
+# Signal display
 st.header(f"🎯 Signal: {SYM}")
 
 p1, p2, p3 = st.columns(3)
@@ -552,7 +644,6 @@ with i4:
 if oi_ch is not None:
     st.metric("OI Change", f"{oi_ch:.2f}%")
 
-# VP
 if vp:
     st.header("📊 Volume Profile")
     v1, v2, v3 = st.columns(3)
@@ -581,7 +672,8 @@ for f in fvgs:
 fig.update_layout(xaxis_rangeslider_visible=False, height=500, template="plotly_dark")
 st.plotly_chart(fig, use_container_width=True)
 
-# Sidebar
+# Sidebar info
+st.sidebar.markdown("---")
 st.sidebar.header("✅ Active Parameters")
 st.sidebar.markdown("""
 1. RSI
@@ -597,6 +689,4 @@ st.sidebar.markdown("""
 11. Fair Value Gaps
 12. Liquidation Zones (est.)
 """)
-st.sidebar.header("🚫 Not Added")
-st.sidebar.markdown("- News (needs CryptoPanic API key)")
 st.sidebar.button("🔄 Refresh", on_click=lambda: st.cache_data.clear())
