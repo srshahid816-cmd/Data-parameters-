@@ -5,6 +5,7 @@ import numpy as np
 import pandas_ta_classic as ta
 import plotly.graph_objects as go
 from datetime import datetime
+from scipy.signal import argrelextrema
 
 st.set_page_config(page_title="Pro Crypto Dashboard", layout="wide")
 st.title("📊 Professional Crypto Futures Dashboard")
@@ -88,6 +89,25 @@ def fetch_okx_taker_volume(ccy="BTC"):
         return pd.DataFrame()
 
 @st.cache_data(ttl=300)
+def fetch_okx_open_interest(ccy="BTC"):
+    try:
+        resp = requests.get(
+            f"{OKX_BASE}/api/v5/rubik/stat/contracts/open-interest-volume",
+            params={"ccy": ccy, "period": "1H"},
+            timeout=15
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get('code') == '0' and data.get('data'):
+            df = pd.DataFrame(data['data'], columns=['timestamp', 'oi', 'vol'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'].astype(float), unit='ms')
+            df['oi'] = pd.to_numeric(df['oi'])
+            return df
+        return pd.DataFrame()
+    except:
+        return pd.DataFrame()
+
+@st.cache_data(ttl=300)
 def fetch_bitget_taker(symbol="BTCUSDT"):
     try:
         resp = requests.get(
@@ -121,6 +141,13 @@ def calculate_macd(df):
         if macd is not None and len(macd) > 0:
             return {'macd': macd.iloc[-1, 0], 'signal': macd.iloc[-1, 1], 'histogram': macd.iloc[-1, 2]}
         return None
+    except:
+        return None
+
+def calculate_atr(df, period=14):
+    try:
+        atr = ta.atr(df['high'], df['low'], df['close'], length=period)
+        return atr.iloc[-1] if len(atr) > 0 else None
     except:
         return None
 
@@ -165,8 +192,63 @@ def calculate_absorption(df):
     except:
         return None
 
-# ==================== SIGNAL ENGINE (PROBABILITY BASED) ====================
-def generate_signal(price, rsi, macd, funding, cvd, vp, absorption):
+# ==================== TREND LINE BREAKOUT DETECTION ====================
+def detect_trendline_breakout(df, window=5):
+    """
+    Detects trendline breakout.
+    Returns: {'breakout': 1, -1, or 0, 'status': str, 'details': list}
+    """
+    try:
+        df = df.copy()
+        df['max'] = df.iloc[argrelextrema(df['high'].values, np.greater_equal, order=window)[0]]['high']
+        df['min'] = df.iloc[argrelextrema(df['low'].values, np.less_equal, order=window)[0]]['low']
+
+        recent_highs = df['max'].dropna().tail(3)
+        recent_lows = df['min'].dropna().tail(3)
+
+        current_idx = len(df) - 1
+        current_close = df['close'].iloc[-1]
+        prev_close = df['close'].iloc[-2]
+
+        # Check Downtrend line (connect swing highs) -> Bullish Breakout
+        if len(recent_highs) >= 2:
+            idx1, idx2 = recent_highs.index[-2], recent_highs.index[-1]
+            if idx1 < idx2:
+                slope = (recent_highs.iloc[-1] - recent_highs.iloc[-2]) / (idx2 - idx1)
+                intercept = recent_highs.iloc[-1] - slope * idx2
+                tl_current = slope * current_idx + intercept
+                tl_prev = slope * (current_idx - 1) + intercept
+                
+                if prev_close <= tl_prev and current_close > tl_current:
+                    return {
+                        'breakout': 1, 
+                        'status': 'Bullish Trendline Breakout', 
+                        'details': [f"Broke above: ${tl_current:,.4f}", "Wait 30-45 mins for confirmation"]
+                    }
+
+        # Check Uptrend line (connect swing lows) -> Bearish Breakout
+        if len(recent_lows) >= 2:
+            idx1, idx2 = recent_lows.index[-2], recent_lows.index[-1]
+            if idx1 < idx2:
+                slope = (recent_lows.iloc[-1] - recent_lows.iloc[-2]) / (idx2 - idx1)
+                intercept = recent_lows.iloc[-1] - slope * idx2
+                tl_current = slope * current_idx + intercept
+                tl_prev = slope * (current_idx - 1) + intercept
+                
+                if prev_close >= tl_prev and current_close < tl_current:
+                    return {
+                        'breakout': -1, 
+                        'status': 'Bearish Trendline Breakout', 
+                        'details': [f"Broke below: ${tl_current:,.4f}", "Wait 30-45 mins for confirmation"]
+                    }
+
+        # No Trendline Breakout Found -> SKIP completely
+        return {'breakout': 0, 'status': 'Skipped', 'details': []}
+    except Exception as e:
+        return {'breakout': 0, 'status': 'Skipped', 'details': []}
+
+# ==================== SIGNAL ENGINE ====================
+def generate_signal(price, rsi, macd, funding, cvd, vp, absorption, tlb, oi_change, atr):
     bull_points = 0
     bear_points = 0
     reasons = []
@@ -229,7 +311,7 @@ def generate_signal(price, rsi, macd, funding, cvd, vp, absorption):
         else:
             details.append(f"Funding={funding:.4f}% → Neutral")
 
-    # 4. CVD
+    # 4. CVD (Delta)
     if cvd is not None:
         if cvd > 0:
             bull_points += 2
@@ -262,6 +344,30 @@ def generate_signal(price, rsi, macd, funding, cvd, vp, absorption):
         reasons.append("High Absorption (Institutional Activity)")
         details.append(f"Absorption={absorption:.2f} → Watch for breakout")
 
+    # 7. Trendline Breakout (SKIP IF 0)
+    if tlb['breakout'] == 1:
+        bull_points += 3
+        reasons.append("Bullish Trendline Breakout")
+        details.extend(tlb['details'])
+    elif tlb['breakout'] == -1:
+        bear_points += 3
+        reasons.append("Bearish Trendline Breakout")
+        details.extend(tlb['details'])
+    # Agar 0 hai to yahan kuch nahi hoga, skip ho jayega
+
+    # 8. Open Interest (OI) Change
+    if oi_change is not None:
+        if oi_change > 2:
+            bull_points += 1.5
+            reasons.append("Open Interest Increasing (Strong Momentum)")
+            details.append(f"OI Change: +{oi_change:.2f}%")
+        elif oi_change < -2:
+            bear_points += 1.5
+            reasons.append("Open Interest Decreasing (Weak Momentum)")
+            details.append(f"OI Change: {oi_change:.2f}%")
+        else:
+            details.append(f"OI Change: {oi_change:.2f}% (Neutral)")
+
     # ==================== PROBABILITY ====================
     total = bull_points + bear_points
     if total == 0:
@@ -281,18 +387,34 @@ def generate_signal(price, rsi, macd, funding, cvd, vp, absorption):
     hold_prob = max(0, 100 - buy_prob - sell_prob)
 
     # ==================== FINAL SIGNAL ====================
-    if buy_prob >= 55:
-        signal, confidence = "BUY", buy_prob
-    elif sell_prob >= 55:
-        signal, confidence = "SELL", sell_prob
+    # If Trendline Just Broke, Force HOLD for confirmation
+    if tlb['breakout'] != 0:
+        signal = "WAIT / HOLD (Trendline Breakout)"
+        confidence = 50
+        reasons.append("⚠️ Trendline just broke. Wait 30-45 mins for confirmation before entry.")
     else:
-        signal, confidence = "WAIT / HOLD", hold_prob
+        if buy_prob >= 55:
+            signal, confidence = "BUY", buy_prob
+        elif sell_prob >= 55:
+            signal, confidence = "SELL", sell_prob
+        else:
+            signal, confidence = "WAIT / HOLD", hold_prob
 
+    # ==================== SL / TP (ATR-Based for 3-12h Trades) ====================
     entry = price
+    if atr is None:
+        atr = entry * 0.02 # Fallback 2%
+        
     if signal == "BUY":
-        sl, tp1, tp2, tp3 = entry*0.98, entry*1.02, entry*1.04, entry*1.06
+        sl = entry - (1.5 * atr)
+        tp1 = entry + (2.0 * atr)
+        tp2 = entry + (3.5 * atr)
+        tp3 = entry + (5.0 * atr)
     elif signal == "SELL":
-        sl, tp1, tp2, tp3 = entry*1.02, entry*0.98, entry*0.96, entry*0.94
+        sl = entry + (1.5 * atr)
+        tp1 = entry - (2.0 * atr)
+        tp2 = entry - (3.5 * atr)
+        tp3 = entry - (5.0 * atr)
     else:
         sl = tp1 = tp2 = tp3 = None
 
@@ -301,7 +423,8 @@ def generate_signal(price, rsi, macd, funding, cvd, vp, absorption):
         'buy_prob': round(buy_prob, 1), 'sell_prob': round(sell_prob, 1), 'hold_prob': round(hold_prob, 1),
         'bull_points': round(bull_points, 1), 'bear_points': round(bear_points, 1),
         'reasons': reasons, 'details': details,
-        'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3
+        'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3,
+        'tlb_status': tlb['status']
     }
 
 # ==================== MAIN ====================
@@ -375,7 +498,12 @@ macd = calculate_macd(klines)
 vp = calculate_volume_profile(klines)
 absorption = calculate_absorption(klines)
 funding = fetch_mexc_funding(selected_symbol)
+atr = calculate_atr(klines)
 
+# Trendline Breakout Detection
+tlb = detect_trendline_breakout(klines)
+
+# CVD
 okx_cvd = fetch_okx_taker_volume(base_ccy)
 cvd = None
 if not okx_cvd.empty:
@@ -385,10 +513,20 @@ else:
     if not bitget_cvd.empty:
         cvd = bitget_cvd['CVD'].iloc[-1]
 
-sig = generate_signal(price, rsi, macd, funding, cvd, vp, absorption)
+# Open Interest Change
+oi_df = fetch_okx_open_interest(base_ccy)
+oi_change = None
+if not oi_df.empty and len(oi_df) > 1:
+    oi_change = ((oi_df['oi'].iloc[-1] - oi_df['oi'].iloc[0]) / oi_df['oi'].iloc[0]) * 100
+
+sig = generate_signal(price, rsi, macd, funding, cvd, vp, absorption, tlb, oi_change, atr)
 
 # ==================== SIGNAL DISPLAY ====================
 st.header(f"🎯 Signal for {selected_symbol}")
+
+# Trendline Status Banner (Only show if breakout happened)
+if tlb['breakout'] != 0:
+    st.warning(f"⚠️ **{tlb['status']}** — 30-45 mins wait karo confirmation ke liye.")
 
 prob_col1, prob_col2, prob_col3 = st.columns(3)
 with prob_col1:
@@ -410,9 +548,9 @@ st.plotly_chart(prob_chart, use_container_width=True)
 
 final_col1, final_col2 = st.columns([1, 1])
 with final_col1:
-    if sig['signal'] == 'BUY':
+    if "BUY" in sig['signal']:
         st.success(f"## 🟢 **{sig['signal']}**")
-    elif sig['signal'] == 'SELL':
+    elif "SELL" in sig['signal']:
         st.error(f"## 🔴 **{sig['signal']}**")
     else:
         st.warning(f"## 🟡 **{sig['signal']}**")
@@ -420,13 +558,14 @@ with final_col1:
 with final_col2:
     st.metric("Entry", f"${sig['entry']:,.4f}")
     if sig['sl']:
-        st.metric("Stop Loss", f"${sig['sl']:,.4f}")
+        st.metric("Stop Loss (ATR Based)", f"${sig['sl']:,.4f}")
 
 if sig['tp1']:
     tp_col1, tp_col2, tp_col3 = st.columns(3)
-    tp_col1.metric("TP1", f"${sig['tp1']:,.4f}")
-    tp_col2.metric("TP2", f"${sig['tp2']:,.4f}")
-    tp_col3.metric("TP3", f"${sig['tp3']:,.4f}")
+    tp_col1.metric("TP1 (2x ATR)", f"${sig['tp1']:,.4f}")
+    tp_col2.metric("TP2 (3.5x ATR)", f"${sig['tp2']:,.4f}")
+    tp_col3.metric("TP3 (5x ATR)", f"${sig['tp3']:,.4f}")
+    st.caption(f"ATR Value: ${atr:,.4f} — SL/TP ATR ke hisaab se dynamic hain (3-12h trades ke liye)")
 
 with st.expander("📋 Signal Analysis (Parameter by Parameter)"):
     st.markdown("**Bullish Points:** " + str(sig['bull_points']))
@@ -460,6 +599,9 @@ with i4:
     if cvd is not None:
         st.metric("CVD (OKX)", f"{cvd:,.0f}")
 
+if oi_change is not None:
+    st.metric("Open Interest Change", f"{oi_change:.2f}%")
+
 # Volume Profile
 st.header(f"📊 Volume Profile ({selected_symbol})")
 if vp:
@@ -489,12 +631,14 @@ st.sidebar.header("✅ Active Parameters")
 st.sidebar.markdown("""
 - Top Gainers/Losers
 - Price / Klines
-- RSI / MACD
+- RSI / MACD / ATR
 - Funding Rate
-- CVD (OKX)
+- CVD (Delta)
+- Open Interest (OI)
 - Volume Profile
 - Absorption
+- Trendline Breakout (If Applicable)
 - Signal (BUY/SELL/WAIT) with Probability
-- Entry / SL / TP1-3
+- Dynamic SL/TP (ATR Based for 3-12h)
 """)
 st.sidebar.button("🔄 Refresh", on_click=lambda: st.cache_data.clear())
