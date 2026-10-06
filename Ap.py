@@ -45,17 +45,18 @@ if MODE == "🤖 AI Chatbot":
 
     client = Groq(api_key=_groq_key)
 
-    # Chatbot sidebar settings
     st.sidebar.markdown("---")
     st.sidebar.header("⚙️ Chatbot Settings")
 
     model = st.sidebar.selectbox(
         "Model",
         [
-            "llama-3.3-70b-versatile",
-            "llama-3.1-8b-instant",
-            "mixtral-8x7b-32768",
-            "gemma2-9b-it"
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+            "meta-llama/llama-4-maverick-17b-128e-instruct",
+            "meta-llama/llama-4-scout-17b-16e-instruct",
+            "qwen/qwen3-32b",
+            "moonshotai/kimi-k2-instruct"
         ],
         index=0
     )
@@ -73,16 +74,13 @@ if MODE == "🤖 AI Chatbot":
         st.session_state.messages = []
         st.rerun()
 
-    # Init chat history
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Display chat history
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # Chat input
     if prompt := st.chat_input("Apna sawal likho..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -113,15 +111,14 @@ if MODE == "🤖 AI Chatbot":
 
     st.sidebar.markdown("---")
     st.sidebar.caption("Powered by Groq (free tier)")
-    st.stop()  # Chatbot mode mein dashboard code na chale
+    st.stop()
 
 # ==================== DASHBOARD MODE ====================
-st.title("📊 Professional Crypto Dashboard v2")
-st.caption(f"Last: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | MEXC + OKX + Bitget | MTF + SMC")
+st.title("📊 Professional Crypto Dashboard v3")
+st.caption(f"Last: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | MEXC + OKX | MTF + SMC + Trendline")
 
 MEXC_BASE = "https://contract.mexc.com"
 OKX_BASE = "https://www.okx.com"
-BITGET_BASE = "https://api.bitget.com"
 
 # ==================== DATA FETCH ====================
 @st.cache_data(ttl=300)
@@ -308,6 +305,62 @@ def detect_ms(df, k=3):
     except:
         return res
 
+# ==================== TRENDLINE BREAKOUT ====================
+def detect_trendline(df, window=5):
+    """
+    Detect trendline breakout.
+    Returns: {'breakout': 1 (bullish), -1 (bearish), 0 (none), 'status': str, 'details': list}
+    """
+    res = {'breakout': 0, 'status': 'No Trendline', 'details': []}
+    try:
+        d = df.copy().reset_index(drop=True)
+        highs = d['high'].values
+        lows = d['low'].values
+        close = d['close'].values
+
+        ph = argrelextrema(highs, np.greater_equal, order=window)[0]
+        pl = argrelextrema(lows, np.less_equal, order=window)[0]
+
+        if len(ph) < 2 and len(pl) < 2:
+            return res
+
+        cur_idx = len(d) - 1
+        cur_close = close[-1]
+        prev_close = close[-2]
+
+        # Downtrend line (connect swing highs) -> Bullish breakout
+        if len(ph) >= 2:
+            i1, i2 = ph[-2], ph[-1]
+            if i2 > i1:
+                slope = (highs[i2] - highs[i1]) / (i2 - i1)
+                intercept = highs[i2] - slope * i2
+                tl_cur = slope * cur_idx + intercept
+                tl_prev = slope * (cur_idx - 1) + intercept
+                if prev_close <= tl_prev and cur_close > tl_cur:
+                    res['breakout'] = 1
+                    res['status'] = 'Bullish Trendline Breakout'
+                    res['details'] = [f"Broke above: ${tl_cur:,.4f}", "Wait 30-45 min confirmation"]
+                    return res
+
+        # Uptrend line (connect swing lows) -> Bearish breakout
+        if len(pl) >= 2:
+            i1, i2 = pl[-2], pl[-1]
+            if i2 > i1:
+                slope = (lows[i2] - lows[i1]) / (i2 - i1)
+                intercept = lows[i2] - slope * i2
+                tl_cur = slope * cur_idx + intercept
+                tl_prev = slope * (cur_idx - 1) + intercept
+                if prev_close >= tl_prev and cur_close < tl_cur:
+                    res['breakout'] = -1
+                    res['status'] = 'Bearish Trendline Breakout'
+                    res['details'] = [f"Broke below: ${tl_cur:,.4f}", "Wait 30-45 min confirmation"]
+                    return res
+
+        res['status'] = 'No Trendline Breakout (Skipped)'
+        return res
+    except:
+        return res
+
 # ==================== ORDER BLOCKS ====================
 def detect_obs(df, lookback=50):
     obs = []
@@ -363,10 +416,11 @@ def liq_zones(df, k=5):
         return []
 
 # ==================== SIGNAL ENGINE ====================
-def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, fvgs, liqz, atr):
+def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, fvgs, liqz, tlb, atr):
     bull = 0; bear = 0
     reasons = []; details = []
 
+    # 1. RSI
     if rsi:
         if rsi < 30: bull += 3; reasons.append("RSI Oversold"); details.append(f"RSI={rsi:.1f} → Buy")
         elif rsi < 40: bull += 1.5; details.append(f"RSI={rsi:.1f} → Mild Bullish")
@@ -374,6 +428,7 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
         elif rsi > 60: bear += 1.5; details.append(f"RSI={rsi:.1f} → Mild Bearish")
         else: details.append(f"RSI={rsi:.1f} → Neutral")
 
+    # 2. MACD
     if macd:
         if macd['hist'] > 0 and macd['macd'] > macd['signal']:
             bull += 2; reasons.append("MACD Bullish"); details.append("MACD: Bullish")
@@ -382,29 +437,35 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
         elif macd['hist'] > 0: bull += 1; details.append("MACD: Mild Bullish")
         elif macd['hist'] < 0: bear += 1; details.append("MACD: Mild Bearish")
 
+    # 3. Funding
     if funding is not None:
         if funding > 0.05: bear += 2; reasons.append("High Funding"); details.append(f"Funding={funding:.4f}% → Bearish")
         elif funding < -0.05: bull += 2; reasons.append("Neg Funding"); details.append(f"Funding={funding:.4f}% → Bullish")
         else: details.append(f"Funding={funding:.4f}% → Neutral")
 
+    # 4. CVD
     if cvd is not None:
         if cvd > 0: bull += 2; reasons.append("Buyers (CVD+)"); details.append(f"CVD={cvd:,.0f} → Buyers")
         else: bear += 2; reasons.append("Sellers (CVD-)"); details.append(f"CVD={cvd:,.0f} → Sellers")
 
+    # 5. VP
     if vp and price:
         if price < vp['VAL']: bull += 2; reasons.append("Below VA"); details.append("Price<VAL → Bullish")
         elif price > vp['VAH']: bear += 2; reasons.append("Above VA"); details.append("Price>VAH → Bearish")
         elif price < vp['POC']: bull += 0.5; details.append("Price<POC → Slight Bullish")
         else: bear += 0.5; details.append("Price>POC → Slight Bearish")
 
+    # 6. Absorption
     if absorb and absorb > 1.5:
         reasons.append("High Absorption"); details.append(f"Absorption={absorb:.2f}")
 
+    # 7. OI
     if oi_ch is not None:
         if oi_ch > 2: bull += 1.5; reasons.append("OI Increasing"); details.append(f"OI +{oi_ch:.2f}%")
         elif oi_ch < -2: bear += 1.5; reasons.append("OI Decreasing"); details.append(f"OI {oi_ch:.2f}%")
         else: details.append(f"OI {oi_ch:.2f}% (Neutral)")
 
+    # 8. MTF
     t15 = tf.get('15m', (0, 'N/A'))[0]
     t1h = tf.get('1H', (0, 'N/A'))[0]
     t4h = tf.get('4H', (0, 'N/A'))[0]
@@ -415,12 +476,14 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
     else:
         details.append(f"MTF: 15m={tf['15m'][1]} 1H={tf['1H'][1]} 4H={tf['4H'][1]}")
 
+    # 9. Market Structure
     if ms['bos'] == 1: bull += 2.5; reasons.append("Bullish BoS"); details.append(ms['status'])
     elif ms['bos'] == -1: bear += 2.5; reasons.append("Bearish BoS"); details.append(ms['status'])
     elif ms['choch'] == 1: bull += 2; reasons.append("Bullish CHoCH"); details.append(ms['status'])
     elif ms['choch'] == -1: bear += 2; reasons.append("Bearish CHoCH"); details.append(ms['status'])
     else: details.append(f"Structure: {ms['status']}")
 
+    # 10. Order Blocks
     if obs and price:
         in_bull_ob = any(o['type']=='bullish' and o['bottom'] <= price <= o['top'] for o in obs)
         in_bear_ob = any(o['type']=='bearish' and o['bottom'] <= price <= o['top'] for o in obs)
@@ -428,12 +491,14 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
         if in_bear_ob: bear += 2; reasons.append("In Bearish OB"); details.append("Price inside Bearish OB")
         if not in_bull_ob and not in_bear_ob: details.append("Not in OB")
 
+    # 11. FVG
     if fvgs and price:
         in_bfvg = any(f['type']=='bullish' and f['bottom'] <= price <= f['top'] for f in fvgs)
         in_sfvg = any(f['type']=='bearish' and f['bottom'] <= price <= f['top'] for f in fvgs)
         if in_bfvg: bull += 1.5; reasons.append("In Bullish FVG"); details.append("Price in Bullish FVG")
         if in_sfvg: bear += 1.5; reasons.append("In Bearish FVG"); details.append("Price in Bearish FVG")
 
+    # 12. Liquidation Zones
     if liqz and price:
         for z in liqz:
             if abs(price - z['price'])/price < 0.005:
@@ -442,6 +507,23 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
                 else:
                     bear += 1; reasons.append("Near Buy-Side Liq"); details.append(f"Buy-side liq @ ${z['price']:,.4f}")
 
+    # 13. Trendline Breakout (SKIP IF 0)
+    if tlb['breakout'] == 1:
+        bull += 3
+        reasons.append("Bullish Trendline Breakout")
+        details.append("Trendline: Bullish Breakout (↑)")
+        for d in tlb['details']:
+            details.append(f"  {d}")
+    elif tlb['breakout'] == -1:
+        bear += 3
+        reasons.append("Bearish Trendline Breakout")
+        details.append("Trendline: Bearish Breakout (↓)")
+        for d in tlb['details']:
+            details.append(f"  {d}")
+    else:
+        details.append(f"Trendline: {tlb['status']}")
+
+    # ==================== PROBABILITY ====================
     total = bull + bear
     if total == 0:
         bp, sp, hp = 33.3, 33.3, 33.4
@@ -453,22 +535,34 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
         sp = min(95, sp+10); bp = max(5, bp-5)
     hp = max(0, 100-bp-sp)
 
-    if bp >= 55: signal, conf = "BUY", bp
-    elif sp >= 55: signal, conf = "SELL", sp
-    else: signal, conf = "WAIT / HOLD", hp
+    # ==================== STRONG BUY / SELL LOGIC ====================
+    strong_buy = bull >= 10 and bull >= bear * 2
+    strong_sell = bear >= 10 and bear >= bull * 2
+
+    if strong_buy:
+        signal, conf = "STRONG BUY 🚀", bp
+    elif strong_sell:
+        signal, conf = "STRONG SELL 🔻", sp
+    elif bp >= 55:
+        signal, conf = "BUY", bp
+    elif sp >= 55:
+        signal, conf = "SELL", sp
+    else:
+        signal, conf = "WAIT / HOLD", hp
 
     entry = price
     if atr is None: atr = entry * 0.02
-    if signal == "BUY":
+    if "BUY" in signal:
         sl = entry - 1.5*atr; tp1 = entry + 2*atr; tp2 = entry + 3.5*atr; tp3 = entry + 5*atr
-    elif signal == "SELL":
+    elif "SELL" in signal:
         sl = entry + 1.5*atr; tp1 = entry - 2*atr; tp2 = entry - 3.5*atr; tp3 = entry - 5*atr
     else:
         sl = tp1 = tp2 = tp3 = None
 
     return {'signal': signal, 'conf': conf, 'bp': round(bp,1), 'sp': round(sp,1), 'hp': round(hp,1),
             'bull': round(bull,1), 'bear': round(bear,1), 'reasons': reasons, 'details': details,
-            'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3}
+            'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3,
+            'strong_buy': strong_buy, 'strong_sell': strong_sell}
 
 # ==================== MAIN DASHBOARD ====================
 tickers = fetch_tickers()
@@ -552,11 +646,12 @@ ms = detect_ms(klines_1h)
 obs = detect_obs(klines_1h)
 fvgs = detect_fvg(klines_1h)
 liqz = liq_zones(klines_1h)
+tlb = detect_trendline(klines_1h)
 
 sig = make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch,
-                  tf_trends, ms, obs, fvgs, liqz, atr)
+                  tf_trends, ms, obs, fvgs, liqz, tlb, atr)
 
-# Signal display
+# ==================== DISPLAY ====================
 st.header(f"🎯 Signal: {SYM}")
 
 p1, p2, p3 = st.columns(3)
@@ -574,11 +669,22 @@ chart = go.Figure(go.Bar(
 chart.update_layout(height=220, template="plotly_dark", showlegend=False, yaxis_range=[0,100])
 st.plotly_chart(chart, use_container_width=True)
 
+# Trendline alert
+if tlb['breakout'] != 0:
+    st.warning(f"⚠️ **{tlb['status']}** — 30-45 mins wait karo confirmation ke liye.")
+
 f1, f2 = st.columns([1,1])
 with f1:
-    if "BUY" in sig['signal']: st.success(f"## 🟢 {sig['signal']}")
-    elif "SELL" in sig['signal']: st.error(f"## 🔴 {sig['signal']}")
-    else: st.warning(f"## 🟡 {sig['signal']}")
+    if "STRONG BUY" in sig['signal']:
+        st.success(f"## 🚀 {sig['signal']}")
+    elif "STRONG SELL" in sig['signal']:
+        st.error(f"## 🔻 {sig['signal']}")
+    elif "BUY" in sig['signal']:
+        st.success(f"## 🟢 {sig['signal']}")
+    elif "SELL" in sig['signal']:
+        st.error(f"## 🔴 {sig['signal']}")
+    else:
+        st.warning(f"## 🟡 {sig['signal']}")
     st.metric("Confidence", f"{sig['conf']:.1f}%")
 with f2:
     st.metric("Entry", f"${sig['entry']:,.4f}")
@@ -590,6 +696,12 @@ if sig['tp1']:
     t2.metric("TP2 (3.5x ATR)", f"${sig['tp2']:,.4f}")
     t3.metric("TP3 (5x ATR)", f"${sig['tp3']:,.4f}")
     st.caption(f"ATR: ${atr:,.4f} — SL/TP ATR-based (3-12h trades)")
+
+# Strong Signal Summary
+if sig['strong_buy']:
+    st.success(f"🚀 **STRONG BUY CONFIRMED** — Bull Points: {sig['bull']} (High Conviction)")
+elif sig['strong_sell']:
+    st.error(f"🔻 **STRONG SELL CONFIRMED** — Bear Points: {sig['bear']} (High Conviction)")
 
 with st.expander("📋 Full Analysis"):
     st.markdown(f"**Bull Points:** {sig['bull']}  |  **Bear Points:** {sig['bear']}")
@@ -606,6 +718,19 @@ mt1, mt2, mt3 = st.columns(3)
 mt1.metric("15m", tf_trends['15m'][1])
 mt2.metric("1H", tf_trends['1H'][1])
 mt3.metric("4H", tf_trends['4H'][1])
+
+# Trendline
+st.header("📐 Trendline Breakout")
+if tlb['breakout'] == 1:
+    st.success(f"🟢 {tlb['status']}")
+    for d in tlb['details']:
+        st.write(f"• {d}")
+elif tlb['breakout'] == -1:
+    st.error(f"🔴 {tlb['status']}")
+    for d in tlb['details']:
+        st.write(f"• {d}")
+else:
+    st.info(f"⚪ {tlb['status']}")
 
 # SMC
 st.header("🏗️ Market Structure (SMC)")
@@ -672,7 +797,7 @@ for f in fvgs:
 fig.update_layout(xaxis_rangeslider_visible=False, height=500, template="plotly_dark")
 st.plotly_chart(fig, use_container_width=True)
 
-# Sidebar info
+# Sidebar
 st.sidebar.markdown("---")
 st.sidebar.header("✅ Active Parameters")
 st.sidebar.markdown("""
@@ -688,5 +813,7 @@ st.sidebar.markdown("""
 10. Order Blocks
 11. Fair Value Gaps
 12. Liquidation Zones (est.)
+13. **Trendline Breakout** ⬅️ NEW
+14. **Strong Buy/Sell Labels** ⬅️ NEW
 """)
 st.sidebar.button("🔄 Refresh", on_click=lambda: st.cache_data.clear())
