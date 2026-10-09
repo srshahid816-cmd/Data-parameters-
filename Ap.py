@@ -99,8 +99,8 @@ if MODE == "🤖 AI Chatbot":
     st.stop()
 
 # ==================== DASHBOARD MODE ====================
-st.title("📊 Professional Crypto Dashboard v7")
-st.caption(f"Last: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | MEXC + OKX | Strong Signal Scanner")
+st.title("📊 Professional Crypto Dashboard v8")
+st.caption(f"Last: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | MEXC + OKX | Trendline + Strong Signal Scanners")
 
 MEXC_BASE = "https://contract.mexc.com"
 MEXC_SPOT = "https://api.mexc.com"
@@ -537,17 +537,112 @@ if tickers.empty:
 sorted_df = tickers.sort_values('riseFallRate', ascending=False)
 all_sym = sorted_df['symbol'].tolist()
 
-# ==================== STRONG SIGNAL SCANNER (NEW SECTION) ====================
+# ==================== TRENDLINE SCANNER (RESTORED) ====================
+st.header("📐 Trendline Scanner — 15m Aor 1H Alag Filters")
+st.caption("15m aur 1H ko alag-alag filter karo. Sirf woh coins dikhayega jahan selected timeframe par breakout ho.")
+
+ts1, ts2, ts3, ts4 = st.columns(4)
+with ts1:
+    ts_top_n = st.selectbox("Top coins scan (Trendline)", [50, 100, 200, 300], index=1)
+with ts2:
+    ts_tf_filter = st.selectbox("Timeframe Filter", ["15m Only", "1H Only", "Both (15m + 1H)"], index=0)
+with ts3:
+    ts_min_volume_m = st.number_input("Min 24h Volume ($M) - Trendline", min_value=0.0, value=10.0, step=1.0)
+with ts4:
+    ts_min_change = st.number_input("Min 24h Change (%)", min_value=-100.0, value=-50.0, step=5.0)
+
+if st.button("🚀 Scan Trendlines", type="primary"):
+    ts_df = sorted_df.copy()
+    ts_df['vol_m'] = ts_df['volume24'] / 1_000_000
+    ts_df = ts_df[ts_df['vol_m'] >= ts_min_volume_m]
+    ts_df = ts_df[ts_df['riseFallRate'] >= ts_min_change]
+    ts_df = ts_df.head(ts_top_n)
+    ts_symbols = ts_df['symbol'].tolist()
+
+    if not ts_symbols:
+        st.warning("Koi coin filter pass nahi hua.")
+    else:
+        progress = st.progress(0)
+        status = st.empty()
+        bull_results = []
+        bear_results = []
+
+        for i, sym in enumerate(ts_symbols):
+            status.text(f"Scanning {sym}... ({i+1}/{len(ts_symbols)})")
+            try:
+                df_15m = fetch_klines(sym, "Min15", 200)
+                df_1h = fetch_klines(sym, "Min60", 200)
+
+                if df_15m.empty and df_1h.empty:
+                    progress.progress((i+1)/len(ts_symbols))
+                    continue
+
+                tlb_15m = detect_trendline(df_15m) if not df_15m.empty else {'breakout': 0, 'status': 'N/A', 'details': []}
+                tlb_1h = detect_trendline(df_1h) if not df_1h.empty else {'breakout': 0, 'status': 'N/A', 'details': []}
+                sweep_15m = detect_liquidity_sweep(df_15m) if not df_15m.empty else {'sweep': 0, 'status': 'N/A', 'details': []}
+                sweep_1h = detect_liquidity_sweep(df_1h) if not df_1h.empty else {'sweep': 0, 'status': 'N/A', 'details': []}
+
+                if ts_tf_filter == "15m Only":
+                    bull_match = tlb_15m['breakout'] == 1 or sweep_15m['sweep'] == 1
+                    bear_match = tlb_15m['breakout'] == -1 or sweep_15m['sweep'] == -1
+                    tf_detail = "15m"
+                elif ts_tf_filter == "1H Only":
+                    bull_match = tlb_1h['breakout'] == 1 or sweep_1h['sweep'] == 1
+                    bear_match = tlb_1h['breakout'] == -1 or sweep_1h['sweep'] == -1
+                    tf_detail = "1H"
+                else:
+                    bull_match = (tlb_15m['breakout'] == 1 and tlb_1h['breakout'] == 1)
+                    bear_match = (tlb_15m['breakout'] == -1 and tlb_1h['breakout'] == -1)
+                    tf_detail = "15m+1H"
+
+                row = ts_df[ts_df['symbol'] == sym].iloc[0]
+
+                if bull_match:
+                    bull_results.append({
+                        'Symbol': sym, 'Price': f"${row['lastPrice']:,.4f}",
+                        '24h %': f"{row['riseFallRate']:+.2f}%",
+                        'Volume ($M)': f"{row['vol_m']:.1f}",
+                        'TF': tf_detail,
+                        '15m': tlb_15m['status'][:22] + (' (Sweep!)' if sweep_15m['sweep'] == 1 else ''),
+                        '1H': tlb_1h['status'][:22] + (' (Sweep!)' if sweep_1h['sweep'] == 1 else '')
+                    })
+                elif bear_match:
+                    bear_results.append({
+                        'Symbol': sym, 'Price': f"${row['lastPrice']:,.4f}",
+                        '24h %': f"{row['riseFallRate']:+.2f}%",
+                        'Volume ($M)': f"{row['vol_m']:.1f}",
+                        'TF': tf_detail,
+                        '15m': tlb_15m['status'][:22] + (' (Sweep!)' if sweep_15m['sweep'] == -1 else ''),
+                        '1H': tlb_1h['status'][:22] + (' (Sweep!)' if sweep_1h['sweep'] == -1 else '')
+                    })
+            except Exception:
+                pass
+            progress.progress((i+1)/len(ts_symbols))
+
+        status.text(f"✅ Trendline Scan Complete! {len(ts_symbols)} coins scanned.")
+        st.markdown(f"### 📊 Results: {len(bull_results)} Bullish | {len(bear_results)} Bearish")
+        if bull_results:
+            st.subheader(f"🟢 Bullish Breakouts ({len(bull_results)})")
+            st.dataframe(pd.DataFrame(bull_results), use_container_width=True, hide_index=True)
+        else: st.info("Koi Bullish nahi mila.")
+        if bear_results:
+            st.subheader(f"🔴 Bearish Breakouts ({len(bear_results)})")
+            st.dataframe(pd.DataFrame(bear_results), use_container_width=True, hide_index=True)
+        else: st.info("Koi Bearish nahi mila.")
+
+st.markdown("---")
+
+# ==================== STRONG SIGNAL SCANNER ====================
 st.header("🎯 Strong Signal Scanner — Points > 8 Filter")
 st.caption("Yeh scanner top coins ko scan karega aur sirf woh dikhayega jahan Bull Points > 8 ya Bear Points > 8 hon.")
 
 ss1, ss2, ss3 = st.columns(3)
 with ss1:
-    ss_top_n = st.selectbox("Top coins scan", [30, 50, 100, 200], index=1)
+    ss_top_n = st.selectbox("Top coins scan (Strong Signal)", [30, 50, 100, 200], index=1)
 with ss2:
     ss_min_pts = st.number_input("Min Points (Buy/Sell)", min_value=5.0, value=8.0, step=0.5)
 with ss3:
-    ss_min_vol = st.number_input("Min 24h Volume ($M)", min_value=0.0, value=20.0, step=5.0)
+    ss_min_vol = st.number_input("Min 24h Volume ($M) - Strong", min_value=0.0, value=20.0, step=5.0)
 
 if st.button("🚀 Scan Strong Signals", type="primary"):
     ss_df = sorted_df.copy()
@@ -607,26 +702,20 @@ if st.button("🚀 Scan Strong Signals", type="primary"):
 
                 if sig_s['bull'] > ss_min_pts:
                     buy_results.append({
-                        'Symbol': sym,
-                        'Price': f"${row_s['lastPrice']:,.4f}",
+                        'Symbol': sym, 'Price': f"${row_s['lastPrice']:,.4f}",
                         '24h %': f"{row_s['riseFallRate']:+.2f}%",
                         'Vol ($M)': f"{row_s['vol_m']:.1f}",
-                        'Signal': sig_s['signal'],
-                        'Bull Pts': sig_s['bull'],
-                        'Bear Pts': sig_s['bear'],
+                        'Signal': sig_s['signal'], 'Bull Pts': sig_s['bull'], 'Bear Pts': sig_s['bear'],
                         'Entry': f"${sig_s['entry']:,.4f}",
                         'SL': f"${sig_s['sl']:,.4f}" if sig_s['sl'] else '-',
                         'TP1': f"${sig_s['tp1']:,.4f}" if sig_s['tp1'] else '-'
                     })
                 elif sig_s['bear'] > ss_min_pts:
                     sell_results.append({
-                        'Symbol': sym,
-                        'Price': f"${row_s['lastPrice']:,.4f}",
+                        'Symbol': sym, 'Price': f"${row_s['lastPrice']:,.4f}",
                         '24h %': f"{row_s['riseFallRate']:+.2f}%",
                         'Vol ($M)': f"{row_s['vol_m']:.1f}",
-                        'Signal': sig_s['signal'],
-                        'Bull Pts': sig_s['bull'],
-                        'Bear Pts': sig_s['bear'],
+                        'Signal': sig_s['signal'], 'Bull Pts': sig_s['bull'], 'Bear Pts': sig_s['bear'],
                         'Entry': f"${sig_s['entry']:,.4f}",
                         'SL': f"${sig_s['sl']:,.4f}" if sig_s['sl'] else '-',
                         'TP1': f"${sig_s['tp1']:,.4f}" if sig_s['tp1'] else '-'
@@ -635,22 +724,16 @@ if st.button("🚀 Scan Strong Signals", type="primary"):
                 pass
             progress.progress((i+1)/len(ss_symbols))
 
-        status.text(f"✅ Scan Complete! {len(ss_symbols)} coins scanned.")
-
-        st.markdown("---")
-        st.markdown(f"### 📊 Strong Signals Found: {len(buy_results)} Bullish | {len(sell_results)} Bearish")
-
+        status.text(f"✅ Strong Signal Scan Complete! {len(ss_symbols)} coins scanned.")
+        st.markdown(f"### 📊 Results: {len(buy_results)} Bullish | {len(sell_results)} Bearish")
         if buy_results:
             st.subheader(f"🟢 Strong BUY Signals ({len(buy_results)})")
             st.dataframe(pd.DataFrame(buy_results), use_container_width=True, hide_index=True)
-        else:
-            st.info("Koi Strong BUY signal nahi mila (Points > 8).")
-
+        else: st.info("Koi Strong BUY nahi mila.")
         if sell_results:
             st.subheader(f"🔴 Strong SELL Signals ({len(sell_results)})")
             st.dataframe(pd.DataFrame(sell_results), use_container_width=True, hide_index=True)
-        else:
-            st.info("Koi Strong SELL signal nahi mila (Points > 8).")
+        else: st.info("Koi Strong SELL nahi mila.")
 
 st.markdown("---")
 
@@ -830,17 +913,9 @@ st.plotly_chart(fig, use_container_width=True)
 st.sidebar.markdown("---")
 st.sidebar.header("✅ Active Parameters")
 st.sidebar.markdown("""
-1. RSI, 2. MACD, 3. Funding
-4. Futures CVD, 5. Spot CVD
-6. Spot/Futures Divergence
-7. Volume Profile, 8. Absorption
-9. Open Interest, 10. MTF Trend
-11. Market Structure
-12. Order Blocks, 13. FVG
-14. Liquidation Zones
-15. Trendline Breakout
-16. Liquidity Sweep
+1-16: RSI, MACD, Funding, CVD, Spot CVD, Divergence, VP, Absorption, OI, MTF, MS, OB, FVG, Liq, Trendline, Sweep
 17. Strong Buy/Sell Labels
-18. **Strong Signal Scanner (>8 pts)**
+18. **Trendline Scanner** (15m/1H)
+19. **Strong Signal Scanner** (>8 pts)
 """)
 st.sidebar.button("🔄 Refresh", on_click=lambda: st.cache_data.clear())
