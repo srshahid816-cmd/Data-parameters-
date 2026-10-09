@@ -23,84 +23,54 @@ except Exception:
 
 # ==================== MODE SELECTOR ====================
 st.sidebar.markdown("## 🧭 Mode")
-MODE = st.sidebar.radio(
-    "Kaunsa mode?",
-    ["📊 Crypto Dashboard", "🤖 AI Chatbot"],
-    index=0,
-    key="mode_selector"
-)
+MODE = st.sidebar.radio("Kaunsa mode?", ["📊 Crypto Dashboard", "🤖 AI Chatbot"], index=0)
 
 # ==================== CHATBOT MODE ====================
 if MODE == "🤖 AI Chatbot":
     st.title("🤖 AI Chatbot")
-    if not _groq_ok:
-        st.error("`groq` library install nahi hai.")
+    if not _groq_ok or not _groq_key:
+        st.error("groq ya GROQ_API_KEY missing.")
         st.stop()
-    if not _groq_key:
-        st.error("GROQ_API_KEY nahi mila. Secrets mein daalo.")
-        st.code('GROQ_API_KEY = "gsk_xxxxxxxxxxxxx"', language="toml")
-        st.stop()
-
     client = Groq(api_key=_groq_key)
-    st.sidebar.markdown("---")
     st.sidebar.header("⚙️ Chatbot Settings")
-
     model = st.sidebar.selectbox("Model", [
-        "openai/gpt-oss-120b",
-        "openai/gpt-oss-20b",
+        "openai/gpt-oss-120b", "openai/gpt-oss-20b",
         "meta-llama/llama-4-maverick-17b-128e-instruct",
         "meta-llama/llama-4-scout-17b-16e-instruct",
-        "qwen/qwen3-32b",
-        "moonshotai/kimi-k2-instruct"
+        "qwen/qwen3-32b", "moonshotai/kimi-k2-instruct"
     ], index=0)
-
     temp = st.sidebar.slider("Temperature", 0.0, 1.5, 0.7, 0.1)
-    max_tok = st.sidebar.slider("Max Response Length", 256, 4096, 1024, 256)
-    sys_prompt = st.sidebar.text_area("System Prompt",
-        "You are a helpful AI assistant. Answer clearly and concisely.", height=100)
-
+    sys_prompt = st.sidebar.text_area("System Prompt", "You are a helpful AI assistant.", height=100)
     if st.sidebar.button("🗑️ Clear Chat"):
         st.session_state.messages = []
         st.rerun()
-
     if "messages" not in st.session_state:
         st.session_state.messages = []
-
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
-
     if prompt := st.chat_input("Apna sawal likho..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+        with st.chat_message("user"): st.markdown(prompt)
         with st.chat_message("assistant"):
-            placeholder = st.empty()
-            full_response = ""
+            ph = st.empty(); full = ""
             try:
                 stream = client.chat.completions.create(
                     model=model,
-                    messages=[{"role": "system", "content": sys_prompt}]
-                    + [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages],
-                    temperature=temp, max_tokens=max_tok, stream=True,
-                )
-                for chunk in stream:
-                    if chunk.choices[0].delta.content:
-                        full_response += chunk.choices[0].delta.content
-                        placeholder.markdown(full_response + "▌")
-                placeholder.markdown(full_response)
-            except Exception as e:
-                full_response = f"Error: {e}"
-                placeholder.error(full_response)
-        st.session_state.messages.append({"role": "assistant", "content": full_response})
-
-    st.sidebar.markdown("---")
-    st.sidebar.caption("Powered by Groq (free tier)")
+                    messages=[{"role": "system", "content": sys_prompt}] + st.session_state.messages,
+                    temperature=temp, stream=True)
+                for ch in stream:
+                    if ch.choices[0].delta.content:
+                        full += ch.choices[0].delta.content
+                        ph.markdown(full + "▌")
+                ph.markdown(full)
+            except Exception as e: ph.error(f"Error: {e}")
+        st.session_state.messages.append({"role": "assistant", "content": full})
     st.stop()
 
 # ==================== DASHBOARD MODE ====================
-st.title("📊 Professional Crypto Dashboard v8")
-st.caption(f"Last: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | MEXC + OKX | Trendline + Strong Signal Scanners")
+st.title("📊 Professional Crypto Dashboard v9")
+st.caption(f"Last: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Signal Persistence + Hold Time")
 
 MEXC_BASE = "https://contract.mexc.com"
 MEXC_SPOT = "https://api.mexc.com"
@@ -111,7 +81,6 @@ OKX_BASE = "https://www.okx.com"
 def fetch_tickers():
     try:
         r = requests.get(f"{MEXC_BASE}/api/v1/contract/ticker", timeout=15)
-        r.raise_for_status()
         d = r.json()
         if d.get("success"):
             df = pd.DataFrame(d["data"])
@@ -120,16 +89,14 @@ def fetch_tickers():
                 df[c] = pd.to_numeric(df[c], errors='coerce')
             df['riseFallRate'] = df['riseFallRate'] * 100
             return df
-    except:
-        pass
+    except: pass
     return pd.DataFrame()
 
 @st.cache_data(ttl=300)
-def fetch_klines(symbol, interval="Min60", limit=200):
+def fetch_klines(symbol, interval="Min60", limit=300):
     try:
         r = requests.get(f"{MEXC_BASE}/api/v1/contract/kline/{symbol}",
                         params={"interval": interval}, timeout=15)
-        r.raise_for_status()
         d = r.json()
         if d.get("success") and d.get("data"):
             k = d["data"]
@@ -142,8 +109,7 @@ def fetch_klines(symbol, interval="Min60", limit=200):
                 'volume': pd.to_numeric(k['vol'], errors='coerce'),
             })
             return df.tail(limit).reset_index(drop=True)
-    except:
-        pass
+    except: pass
     return pd.DataFrame()
 
 @st.cache_data(ttl=300)
@@ -151,10 +117,8 @@ def fetch_funding(symbol):
     try:
         r = requests.get(f"{MEXC_BASE}/api/v1/contract/funding_rate/{symbol}", timeout=15)
         d = r.json()
-        if d.get("success"):
-            return float(d["data"]["fundingRate"]) * 100
-    except:
-        pass
+        if d.get("success"): return float(d["data"]["fundingRate"]) * 100
+    except: pass
     return None
 
 @st.cache_data(ttl=300)
@@ -169,8 +133,7 @@ def fetch_cvd(ccy, inst_type="CONTRACTS"):
             df['sellVol'] = pd.to_numeric(df['sellVol'])
             df['CVD'] = df['buyVol'] - df['sellVol']
             return df
-    except:
-        pass
+    except: pass
     return pd.DataFrame()
 
 @st.cache_data(ttl=300)
@@ -183,8 +146,7 @@ def fetch_oi(ccy):
             df = pd.DataFrame(d['data'], columns=['timestamp', 'oi', 'vol'])
             df['oi'] = pd.to_numeric(df['oi'])
             return df
-    except:
-        pass
+    except: pass
     return pd.DataFrame()
 
 # ==================== INDICATORS ====================
@@ -192,24 +154,21 @@ def calc_rsi(df, n=14):
     try:
         v = ta.rsi(df['close'], length=n)
         return float(v.iloc[-1]) if v is not None and len(v) > 0 else None
-    except:
-        return None
+    except: return None
 
 def calc_macd(df):
     try:
         m = ta.macd(df['close'])
         if m is not None and len(m) > 0:
             return {'macd': float(m.iloc[-1,0]), 'signal': float(m.iloc[-1,1]), 'hist': float(m.iloc[-1,2])}
-    except:
-        pass
+    except: pass
     return None
 
 def calc_atr(df, n=14):
     try:
         v = ta.atr(df['high'], df['low'], df['close'], length=n)
         return float(v.iloc[-1]) if v is not None and len(v) > 0 else None
-    except:
-        return None
+    except: return None
 
 def calc_vp(df, bins=50):
     try:
@@ -228,22 +187,17 @@ def calc_vp(df, bins=50):
         for b, v in sv.items():
             cum += v; vb.append(b)
             if cum >= total * 0.7: break
-        vah = edges[max(vb)+1]
-        val = edges[min(vb)]
-        return {'POC': poc, 'VAH': vah, 'VAL': val}
-    except:
-        return None
+        return {'POC': poc, 'VAH': edges[max(vb)+1], 'VAL': edges[min(vb)]}
+    except: return None
 
 def calc_absorption(df):
     try:
         if len(df) < 20: return None
-        d = df.copy()
-        d['range'] = d['high'] - d['low']
+        d = df.copy(); d['range'] = d['high'] - d['low']
         r = d.tail(10)
         av = r['volume'].mean(); ar = r['range'].mean()
         return float(((r['volume']/av)/(r['range']/ar + 1e-10)).mean())
-    except:
-        return None
+    except: return None
 
 # ==================== TREND ====================
 def get_trend(df, k=3):
@@ -258,8 +212,7 @@ def get_trend(df, k=3):
         if lh > ph_prev and ll > pl_prev: return 1, "UP"
         if lh < ph_prev and ll < pl_prev: return -1, "DOWN"
         return 0, "RANGE"
-    except:
-        return 0, "N/A"
+    except: return 0, "N/A"
 
 # ==================== MARKET STRUCTURE ====================
 def detect_ms(df, k=3):
@@ -276,20 +229,14 @@ def detect_ms(df, k=3):
         up = last_ph > prev_ph and last_pl > prev_pl
         dn = last_ph < prev_ph and last_pl < prev_pl
         if up:
-            if cur > last_ph:
-                res['bos'] = 1; res['status'] = 'Bullish BoS'
-            elif cur < last_pl:
-                res['choch'] = -1; res['status'] = 'Bearish CHoCH'
+            if cur > last_ph: res['bos'] = 1; res['status'] = 'Bullish BoS'
+            elif cur < last_pl: res['choch'] = -1; res['status'] = 'Bearish CHoCH'
         elif dn:
-            if cur < last_pl:
-                res['bos'] = -1; res['status'] = 'Bearish BoS'
-            elif cur > last_ph:
-                res['choch'] = 1; res['status'] = 'Bullish CHoCH'
-        else:
-            res['status'] = 'Ranging'
+            if cur < last_pl: res['bos'] = -1; res['status'] = 'Bearish BoS'
+            elif cur > last_ph: res['choch'] = 1; res['status'] = 'Bullish CHoCH'
+        else: res['status'] = 'Ranging'
         return res
-    except:
-        return res
+    except: return res
 
 # ==================== TRENDLINE ====================
 def detect_trendline(df, window=5):
@@ -300,9 +247,7 @@ def detect_trendline(df, window=5):
         ph = argrelextrema(highs, np.greater_equal, order=window)[0]
         pl = argrelextrema(lows, np.less_equal, order=window)[0]
         if len(ph) < 2 and len(pl) < 2: return res
-        cur_idx = len(d) - 1
-        cur_close = close[-1]; prev_close = close[-2]
-
+        cur_idx = len(d) - 1; cur_close = close[-1]; prev_close = close[-2]
         if len(ph) >= 2:
             i1, i2 = ph[-2], ph[-1]
             if i2 > i1:
@@ -311,11 +256,8 @@ def detect_trendline(df, window=5):
                 tl_cur = slope * cur_idx + intercept
                 tl_prev = slope * (cur_idx - 1) + intercept
                 if prev_close <= tl_prev and cur_close > tl_cur:
-                    res['breakout'] = 1
-                    res['status'] = 'Bullish Trendline Breakout'
-                    res['details'] = [f"Broke above: ${tl_cur:,.4f}"]
-                    return res
-
+                    res['breakout'] = 1; res['status'] = 'Bullish Trendline Breakout'
+                    res['details'] = [f"Broke above: ${tl_cur:,.4f}"]; return res
         if len(pl) >= 2:
             i1, i2 = pl[-2], pl[-1]
             if i2 > i1:
@@ -324,42 +266,36 @@ def detect_trendline(df, window=5):
                 tl_cur = slope * cur_idx + intercept
                 tl_prev = slope * (cur_idx - 1) + intercept
                 if prev_close >= tl_prev and cur_close < tl_cur:
-                    res['breakout'] = -1
-                    res['status'] = 'Bearish Trendline Breakout'
-                    res['details'] = [f"Broke below: ${tl_cur:,.4f}"]
-                    return res
+                    res['breakout'] = -1; res['status'] = 'Bearish Trendline Breakout'
+                    res['details'] = [f"Broke below: ${tl_cur:,.4f}"]; return res
         res['status'] = 'No Trendline Breakout (Skipped)'
         return res
-    except:
-        return res
+    except: return res
 
 # ==================== LIQUIDITY SWEEP ====================
 def detect_liquidity_sweep(df, lookback=20):
     res = {'sweep': 0, 'status': 'No Sweep', 'details': []}
     try:
         if df is None or len(df) < lookback + 5: return res
-        d = df.copy().reset_index(drop=True)
-        recent = d.tail(lookback)
+        d = df.copy().reset_index(drop=True); recent = d.tail(lookback)
         for i in range(len(d) - 5, len(d)):
-            candle = d.iloc[i]
-            body = abs(candle['close'] - candle['open'])
-            rng = candle['high'] - candle['low']
+            c = d.iloc[i]
+            body = abs(c['close'] - c['open']); rng = c['high'] - c['low']
             if rng == 0: continue
-            lower_wick = min(candle['open'], candle['close']) - candle['low']
-            upper_wick = candle['high'] - max(candle['open'], candle['close'])
-            if lower_wick > 2 * body and lower_wick / rng > 0.6:
-                prev_low = recent['low'].iloc[:-5].min() if len(recent) > 5 else candle['low']
-                if candle['low'] < prev_low:
+            lw = min(c['open'], c['close']) - c['low']
+            uw = c['high'] - max(c['open'], c['close'])
+            if lw > 2*body and lw/rng > 0.6:
+                prev_low = recent['low'].iloc[:-5].min() if len(recent) > 5 else c['low']
+                if c['low'] < prev_low:
                     res['sweep'] = 1; res['status'] = 'Bullish Liquidity Sweep'; return res
-            if upper_wick > 2 * body and upper_wick / rng > 0.6:
-                prev_high = recent['high'].iloc[:-5].max() if len(recent) > 5 else candle['high']
-                if candle['high'] > prev_high:
+            if uw > 2*body and uw/rng > 0.6:
+                prev_high = recent['high'].iloc[:-5].max() if len(recent) > 5 else c['high']
+                if c['high'] > prev_high:
                     res['sweep'] = -1; res['status'] = 'Bearish Liquidity Sweep'; return res
         return res
-    except:
-        return res
+    except: return res
 
-# ==================== ORDER BLOCKS ====================
+# ==================== ORDER BLOCKS / FVG / LIQ ====================
 def detect_obs(df, lookback=50):
     obs = []
     if df is None or len(df) < 20: return obs
@@ -370,18 +306,14 @@ def detect_obs(df, lookback=50):
         if pd.isna(atr_v): atr_v = body.mean()
         for i in range(2, len(d)-2):
             if d['close'].iloc[i] < d['open'].iloc[i]:
-                if (d['close'].iloc[i+1] > d['high'].iloc[i] and
-                    (d['close'].iloc[i+2] - d['open'].iloc[i+2]) > 1.5*atr_v):
+                if (d['close'].iloc[i+1] > d['high'].iloc[i] and (d['close'].iloc[i+2] - d['open'].iloc[i+2]) > 1.5*atr_v):
                     obs.append({'type': 'bullish', 'top': d['high'].iloc[i], 'bottom': d['low'].iloc[i]})
             if d['close'].iloc[i] > d['open'].iloc[i]:
-                if (d['close'].iloc[i+1] < d['low'].iloc[i] and
-                    (d['open'].iloc[i+2] - d['close'].iloc[i+2]) > 1.5*atr_v):
+                if (d['close'].iloc[i+1] < d['low'].iloc[i] and (d['open'].iloc[i+2] - d['close'].iloc[i+2]) > 1.5*atr_v):
                     obs.append({'type': 'bearish', 'top': d['high'].iloc[i], 'bottom': d['low'].iloc[i]})
         return obs[-3:]
-    except:
-        return []
+    except: return []
 
-# ==================== FVG ====================
 def detect_fvg(df, lookback=50):
     fvgs = []
     if df is None or len(df) < 5: return fvgs
@@ -393,10 +325,8 @@ def detect_fvg(df, lookback=50):
             if d['high'].iloc[i] < d['low'].iloc[i-2]:
                 fvgs.append({'type': 'bearish', 'top': d['low'].iloc[i-2], 'bottom': d['high'].iloc[i]})
         return fvgs[-3:]
-    except:
-        return []
+    except: return []
 
-# ==================== LIQ ZONES ====================
 def liq_zones(df, k=5):
     zones = []
     if df is None or len(df) < 30: return zones
@@ -408,11 +338,120 @@ def liq_zones(df, k=5):
         for idx in ph[-3:]: zones.append({'type': 'buy_side', 'price': float(highs[idx])})
         for idx in pl[-3:]: zones.append({'type': 'sell_side', 'price': float(lows[idx])})
         return zones
-    except:
-        return []
+    except: return []
+
+# ==================== NEW: SIGNAL PERSISTENCE CHECK ====================
+def check_signal_persistence(df, timeframe_min=60, min_hours=2, max_hours=10):
+    """
+    Check how consistent the price action has been over the last 2-10 hours.
+    Returns persistence info: how many of the last N candles were in same direction.
+    """
+    try:
+        if df is None or len(df) < 20:
+            return {'persistence': 0, 'candles': 0, 'up_candles': 0, 'down_candles': 0,
+                    'direction': 0, 'status': 'Insufficient Data'}
+        
+        # Calculate how many candles to check
+        candles_min = max(2, int(min_hours * 60 / timeframe_min))
+        candles_max = min(len(df) - 5, int(max_hours * 60 / timeframe_min))
+        
+        if candles_max < candles_min:
+            candles_max = candles_min
+        
+        recent = df.tail(candles_max).copy()
+        recent['dir'] = np.sign(recent['close'] - recent['open']).astype(int)
+        
+        up_candles = int((recent['dir'] == 1).sum())
+        down_candles = int((recent['dir'] == -1).sum())
+        
+        # Also check higher highs / lower lows
+        recent['hh'] = recent['high'] > recent['high'].shift(1)
+        recent['ll'] = recent['low'] < recent['low'].shift(1)
+        hh_count = int(recent['hh'].sum())
+        ll_count = int(recent['ll'].sum())
+        
+        # Determine direction
+        if up_candles > down_candles * 1.5:
+            direction = 1
+            persistence = up_candles / candles_max
+        elif down_candles > up_candles * 1.5:
+            direction = -1
+            persistence = down_candles / candles_max
+        else:
+            direction = 0
+            persistence = max(up_candles, down_candles) / candles_max
+        
+        status = "Strong" if persistence > 0.65 else ("Moderate" if persistence > 0.55 else "Weak")
+        
+        return {
+            'persistence': round(persistence, 2),
+            'candles': candles_max,
+            'up_candles': up_candles,
+            'down_candles': down_candles,
+            'hh_count': hh_count,
+            'll_count': ll_count,
+            'direction': direction,
+            'status': status,
+            'hours_checked': round(candles_max * timeframe_min / 60, 1)
+        }
+    except Exception as e:
+        return {'persistence': 0, 'candles': 0, 'direction': 0, 'status': f'Error: {e}',
+                'up_candles': 0, 'down_candles': 0, 'hh_count': 0, 'll_count': 0, 'hours_checked': 0}
+
+# ==================== NEW: HOLD TIME ESTIMATE ====================
+def estimate_hold_time(df, atr, signal_direction, vp, price):
+    """
+    Estimate how long the trade should be held based on volatility and structure.
+    Returns estimated hours (min 2, max 12+).
+    """
+    try:
+        if df is None or len(df) < 30 or atr is None or atr == 0:
+            return {'min_hours': 2, 'max_hours': 8, 'target_price': price, 'reason': 'Default'}
+        
+        # Calculate average volatility per hour
+        recent = df.tail(20)
+        avg_range = (recent['high'] - recent['low']).mean()
+        avg_range_pct = (avg_range / price) * 100
+        
+        # Find target distance (to POC or recent high/low)
+        if signal_direction == 1:  # BUY
+            if vp and vp['VAH'] > price:
+                target = vp['VAH']
+            else:
+                target = df['high'].tail(50).max()
+            distance = target - price
+        elif signal_direction == -1:  # SELL
+            if vp and vp['VAL'] < price:
+                target = vp['VAL']
+            else:
+                target = df['low'].tail(50).min()
+            distance = price - target
+        else:
+            return {'min_hours': 2, 'max_hours': 8, 'target_price': price, 'reason': 'No signal'}
+        
+        if distance <= 0 or avg_range == 0:
+            return {'min_hours': 2, 'max_hours': 8, 'target_price': price, 'reason': 'Invalid distance'}
+        
+        # Estimate how many candles needed
+        candles_needed = distance / avg_range
+        
+        # Convert to hours (assuming 1H candles)
+        est_hours = candles_needed * 1  # for 1H timeframe
+        
+        min_h = max(2, int(est_hours * 0.7))
+        max_h = max(min_h + 2, int(est_hours * 1.5))
+        
+        return {
+            'min_hours': min_h,
+            'max_hours': max_h,
+            'target_price': float(target),
+            'reason': f'Volatility: {avg_range_pct:.2f}%/hr'
+        }
+    except Exception as e:
+        return {'min_hours': 2, 'max_hours': 8, 'target_price': price, 'reason': f'Error: {e}'}
 
 # ==================== SIGNAL ENGINE ====================
-def make_signal(price, rsi, macd, funding, cvd, spot_cvd, vp, absorb, oi_ch, tf, ms, obs, fvgs, liqz, tlb, sweep, atr):
+def make_signal(price, rsi, macd, funding, cvd, spot_cvd, vp, absorb, oi_ch, tf, ms, obs, fvgs, liqz, tlb, sweep, atr, persistence):
     bull = 0; bear = 0
     reasons = []; details = []
 
@@ -444,10 +483,8 @@ def make_signal(price, rsi, macd, funding, cvd, spot_cvd, vp, absorb, oi_ch, tf,
         else: bear += 1.5; reasons.append("Spot Sellers Active")
         details.append(f"Spot CVD={spot_cvd:,.0f}")
         if cvd is not None:
-            if cvd < 0 and spot_cvd > 0:
-                bull += 1; reasons.append("Spot/Futures Bullish Divergence")
-            elif cvd > 0 and spot_cvd < 0:
-                bear += 1; reasons.append("Spot/Futures Bearish Divergence")
+            if cvd < 0 and spot_cvd > 0: bull += 1; reasons.append("Spot/Futures Bullish Divergence")
+            elif cvd > 0 and spot_cvd < 0: bear += 1; reasons.append("Spot/Futures Bearish Divergence")
 
     if vp and price:
         if price < vp['VAL']: bull += 2; reasons.append("Below VA")
@@ -500,6 +537,25 @@ def make_signal(price, rsi, macd, funding, cvd, spot_cvd, vp, absorb, oi_ch, tf,
     elif sweep['sweep'] == -1: bear += 2.5; reasons.append("Bearish Liquidity Sweep")
     details.append(f"Sweep: {sweep['status']}")
 
+    # ==================== PERSISTENCE MULTIPLIER (NEW) ====================
+    persistence_multiplier = 1.0
+    if persistence and persistence['candles'] > 0:
+        if persistence['direction'] == 1:
+            # Bullish persistence
+            if persistence['persistence'] > 0.65:
+                bull += 2; reasons.append(f"Bullish Persistence ({persistence['persistence']*100:.0f}% over {persistence['hours_checked']}h)")
+                persistence_multiplier = 1.2
+            elif persistence['persistence'] > 0.55:
+                bull += 1; reasons.append(f"Mild Bullish Persistence ({persistence['persistence']*100:.0f}%)")
+        elif persistence['direction'] == -1:
+            if persistence['persistence'] > 0.65:
+                bear += 2; reasons.append(f"Bearish Persistence ({persistence['persistence']*100:.0f}% over {persistence['hours_checked']}h)")
+                persistence_multiplier = 1.2
+            elif persistence['persistence'] > 0.55:
+                bear += 1; reasons.append(f"Mild Bearish Persistence ({persistence['persistence']*100:.0f}%)")
+        else:
+            details.append(f"Persistence: Mixed ({persistence['up_candles']}↑ / {persistence['down_candles']}↓)")
+
     total = bull + bear
     if total == 0: bp, sp, hp = 33.3, 33.3, 33.4
     else:
@@ -528,28 +584,22 @@ def make_signal(price, rsi, macd, funding, cvd, spot_cvd, vp, absorb, oi_ch, tf,
             'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3,
             'strong_buy': strong_buy, 'strong_sell': strong_sell}
 
-# ==================== MAIN DASHBOARD ====================
+# ==================== MAIN ====================
 tickers = fetch_tickers()
 if tickers.empty:
-    st.error("MEXC data fetch nahi hua. Refresh karo.")
+    st.error("MEXC data fetch nahi hua.")
     st.stop()
 
 sorted_df = tickers.sort_values('riseFallRate', ascending=False)
 all_sym = sorted_df['symbol'].tolist()
 
-# ==================== TRENDLINE SCANNER (RESTORED) ====================
+# ==================== TRENDLINE SCANNER ====================
 st.header("📐 Trendline Scanner — 15m Aor 1H Alag Filters")
-st.caption("15m aur 1H ko alag-alag filter karo. Sirf woh coins dikhayega jahan selected timeframe par breakout ho.")
-
 ts1, ts2, ts3, ts4 = st.columns(4)
-with ts1:
-    ts_top_n = st.selectbox("Top coins scan (Trendline)", [50, 100, 200, 300], index=1)
-with ts2:
-    ts_tf_filter = st.selectbox("Timeframe Filter", ["15m Only", "1H Only", "Both (15m + 1H)"], index=0)
-with ts3:
-    ts_min_volume_m = st.number_input("Min 24h Volume ($M) - Trendline", min_value=0.0, value=10.0, step=1.0)
-with ts4:
-    ts_min_change = st.number_input("Min 24h Change (%)", min_value=-100.0, value=-50.0, step=5.0)
+with ts1: ts_top_n = st.selectbox("Top coins", [50, 100, 200, 300], index=1)
+with ts2: ts_tf_filter = st.selectbox("Timeframe", ["15m Only", "1H Only", "Both (15m + 1H)"], index=0)
+with ts3: ts_min_volume_m = st.number_input("Min Vol ($M)", min_value=0.0, value=10.0, step=1.0)
+with ts4: ts_min_change = st.number_input("Min 24h Change (%)", min_value=-100.0, value=-50.0, step=5.0)
 
 if st.button("🚀 Scan Trendlines", type="primary"):
     ts_df = sorted_df.copy()
@@ -559,29 +609,21 @@ if st.button("🚀 Scan Trendlines", type="primary"):
     ts_df = ts_df.head(ts_top_n)
     ts_symbols = ts_df['symbol'].tolist()
 
-    if not ts_symbols:
-        st.warning("Koi coin filter pass nahi hua.")
+    if not ts_symbols: st.warning("Koi coin filter pass nahi hua.")
     else:
-        progress = st.progress(0)
-        status = st.empty()
-        bull_results = []
-        bear_results = []
-
+        progress = st.progress(0); status = st.empty()
+        bull_results = []; bear_results = []
         for i, sym in enumerate(ts_symbols):
             status.text(f"Scanning {sym}... ({i+1}/{len(ts_symbols)})")
             try:
-                df_15m = fetch_klines(sym, "Min15", 200)
-                df_1h = fetch_klines(sym, "Min60", 200)
-
+                df_15m = fetch_klines(sym, "Min15", 300)
+                df_1h = fetch_klines(sym, "Min60", 300)
                 if df_15m.empty and df_1h.empty:
-                    progress.progress((i+1)/len(ts_symbols))
-                    continue
-
+                    progress.progress((i+1)/len(ts_symbols)); continue
                 tlb_15m = detect_trendline(df_15m) if not df_15m.empty else {'breakout': 0, 'status': 'N/A', 'details': []}
                 tlb_1h = detect_trendline(df_1h) if not df_1h.empty else {'breakout': 0, 'status': 'N/A', 'details': []}
                 sweep_15m = detect_liquidity_sweep(df_15m) if not df_15m.empty else {'sweep': 0, 'status': 'N/A', 'details': []}
                 sweep_1h = detect_liquidity_sweep(df_1h) if not df_1h.empty else {'sweep': 0, 'status': 'N/A', 'details': []}
-
                 if ts_tf_filter == "15m Only":
                     bull_match = tlb_15m['breakout'] == 1 or sweep_15m['sweep'] == 1
                     bear_match = tlb_15m['breakout'] == -1 or sweep_15m['sweep'] == -1
@@ -594,146 +636,102 @@ if st.button("🚀 Scan Trendlines", type="primary"):
                     bull_match = (tlb_15m['breakout'] == 1 and tlb_1h['breakout'] == 1)
                     bear_match = (tlb_15m['breakout'] == -1 and tlb_1h['breakout'] == -1)
                     tf_detail = "15m+1H"
-
                 row = ts_df[ts_df['symbol'] == sym].iloc[0]
-
                 if bull_match:
-                    bull_results.append({
-                        'Symbol': sym, 'Price': f"${row['lastPrice']:,.4f}",
-                        '24h %': f"{row['riseFallRate']:+.2f}%",
-                        'Volume ($M)': f"{row['vol_m']:.1f}",
+                    bull_results.append({'Symbol': sym, 'Price': f"${row['lastPrice']:,.4f}",
+                        '24h %': f"{row['riseFallRate']:+.2f}%", 'Volume ($M)': f"{row['vol_m']:.1f}",
                         'TF': tf_detail,
                         '15m': tlb_15m['status'][:22] + (' (Sweep!)' if sweep_15m['sweep'] == 1 else ''),
-                        '1H': tlb_1h['status'][:22] + (' (Sweep!)' if sweep_1h['sweep'] == 1 else '')
-                    })
+                        '1H': tlb_1h['status'][:22] + (' (Sweep!)' if sweep_1h['sweep'] == 1 else '')})
                 elif bear_match:
-                    bear_results.append({
-                        'Symbol': sym, 'Price': f"${row['lastPrice']:,.4f}",
-                        '24h %': f"{row['riseFallRate']:+.2f}%",
-                        'Volume ($M)': f"{row['vol_m']:.1f}",
+                    bear_results.append({'Symbol': sym, 'Price': f"${row['lastPrice']:,.4f}",
+                        '24h %': f"{row['riseFallRate']:+.2f}%", 'Volume ($M)': f"{row['vol_m']:.1f}",
                         'TF': tf_detail,
                         '15m': tlb_15m['status'][:22] + (' (Sweep!)' if sweep_15m['sweep'] == -1 else ''),
-                        '1H': tlb_1h['status'][:22] + (' (Sweep!)' if sweep_1h['sweep'] == -1 else '')
-                    })
-            except Exception:
-                pass
+                        '1H': tlb_1h['status'][:22] + (' (Sweep!)' if sweep_1h['sweep'] == -1 else '')})
+            except: pass
             progress.progress((i+1)/len(ts_symbols))
-
         status.text(f"✅ Trendline Scan Complete! {len(ts_symbols)} coins scanned.")
         st.markdown(f"### 📊 Results: {len(bull_results)} Bullish | {len(bear_results)} Bearish")
         if bull_results:
-            st.subheader(f"🟢 Bullish Breakouts ({len(bull_results)})")
+            st.subheader(f"🟢 Bullish ({len(bull_results)})")
             st.dataframe(pd.DataFrame(bull_results), use_container_width=True, hide_index=True)
-        else: st.info("Koi Bullish nahi mila.")
         if bear_results:
-            st.subheader(f"🔴 Bearish Breakouts ({len(bear_results)})")
+            st.subheader(f"🔴 Bearish ({len(bear_results)})")
             st.dataframe(pd.DataFrame(bear_results), use_container_width=True, hide_index=True)
-        else: st.info("Koi Bearish nahi mila.")
 
 st.markdown("---")
 
 # ==================== STRONG SIGNAL SCANNER ====================
-st.header("🎯 Strong Signal Scanner — Points > 8 Filter")
-st.caption("Yeh scanner top coins ko scan karega aur sirf woh dikhayega jahan Bull Points > 8 ya Bear Points > 8 hon.")
-
+st.header("🎯 Strong Signal Scanner — Points > 8")
 ss1, ss2, ss3 = st.columns(3)
-with ss1:
-    ss_top_n = st.selectbox("Top coins scan (Strong Signal)", [30, 50, 100, 200], index=1)
-with ss2:
-    ss_min_pts = st.number_input("Min Points (Buy/Sell)", min_value=5.0, value=8.0, step=0.5)
-with ss3:
-    ss_min_vol = st.number_input("Min 24h Volume ($M) - Strong", min_value=0.0, value=20.0, step=5.0)
+with ss1: ss_top_n = st.selectbox("Top coins", [30, 50, 100, 200], index=1)
+with ss2: ss_min_pts = st.number_input("Min Points", min_value=5.0, value=8.0, step=0.5)
+with ss3: ss_min_vol = st.number_input("Min Vol ($M)", min_value=0.0, value=20.0, step=5.0)
 
 if st.button("🚀 Scan Strong Signals", type="primary"):
     ss_df = sorted_df.copy()
     ss_df['vol_m'] = ss_df['volume24'] / 1_000_000
-    ss_df = ss_df[ss_df['vol_m'] >= ss_min_vol]
-    ss_df = ss_df.head(ss_top_n)
+    ss_df = ss_df[ss_df['vol_m'] >= ss_min_vol].head(ss_top_n)
     ss_symbols = ss_df['symbol'].tolist()
-
-    if not ss_symbols:
-        st.warning("Koi coin filter pass nahi hua. Min volume kam karo.")
+    if not ss_symbols: st.warning("Koi coin filter pass nahi hua.")
     else:
-        progress = st.progress(0)
-        status = st.empty()
-        buy_results = []
-        sell_results = []
-
+        progress = st.progress(0); status = st.empty()
+        buy_results = []; sell_results = []
         for i, sym in enumerate(ss_symbols):
             status.text(f"Scanning {sym}... ({i+1}/{len(ss_symbols)})")
             try:
                 ccy_scan = sym.replace("_USDT", "")
-                df_15m = fetch_klines(sym, "Min15", 200)
-                df_1h = fetch_klines(sym, "Min60", 200)
-                df_4h = fetch_klines(sym, "Hour4", 200)
-
+                df_15m = fetch_klines(sym, "Min15", 300)
+                df_1h = fetch_klines(sym, "Min60", 300)
+                df_4h = fetch_klines(sym, "Hour4", 300)
                 if df_1h.empty or len(df_1h) < 50:
-                    progress.progress((i+1)/len(ss_symbols))
-                    continue
-
+                    progress.progress((i+1)/len(ss_symbols)); continue
                 price_s = float(df_1h['close'].iloc[-1])
-                rsi_s = calc_rsi(df_1h)
-                macd_s = calc_macd(df_1h)
-                vp_s = calc_vp(df_1h)
-                absorb_s = calc_absorption(df_1h)
-                atr_s = calc_atr(df_1h)
+                rsi_s = calc_rsi(df_1h); macd_s = calc_macd(df_1h)
+                vp_s = calc_vp(df_1h); absorb_s = calc_absorption(df_1h); atr_s = calc_atr(df_1h)
                 funding_s = fetch_funding(sym)
-                cvd_df_s = fetch_cvd(ccy_scan, "CONTRACTS")
-                cvd_s = float(cvd_df_s['CVD'].iloc[-1]) if not cvd_df_s.empty else None
-                spot_cvd_df_s = fetch_cvd(ccy_scan, "SPOT")
-                spot_cvd_s = float(spot_cvd_df_s['CVD'].iloc[-1]) if not spot_cvd_df_s.empty else None
-                oi_df_s = fetch_oi(ccy_scan)
-                oi_ch_s = None
+                cvd_s = None; cvd_df_s = fetch_cvd(ccy_scan, "CONTRACTS")
+                if not cvd_df_s.empty: cvd_s = float(cvd_df_s['CVD'].iloc[-1])
+                spot_cvd_s = None; spot_cvd_df_s = fetch_cvd(ccy_scan, "SPOT")
+                if not spot_cvd_df_s.empty: spot_cvd_s = float(spot_cvd_df_s['CVD'].iloc[-1])
+                oi_ch_s = None; oi_df_s = fetch_oi(ccy_scan)
                 if not oi_df_s.empty and len(oi_df_s) > 1:
                     oi_ch_s = ((oi_df_s['oi'].iloc[-1] - oi_df_s['oi'].iloc[0]) / oi_df_s['oi'].iloc[0]) * 100
-
                 tf_s = {'15m': get_trend(df_15m), '1H': get_trend(df_1h), '4H': get_trend(df_4h)}
-                ms_s = detect_ms(df_1h)
-                obs_s = detect_obs(df_1h)
-                fvgs_s = detect_fvg(df_1h)
-                liqz_s = liq_zones(df_1h)
-                tlb_s = detect_trendline(df_1h)
-                sweep_s = detect_liquidity_sweep(df_1h)
-
-                sig_s = make_signal(price_s, rsi_s, macd_s, funding_s, cvd_s, spot_cvd_s, vp_s, absorb_s, oi_ch_s,
-                                    tf_s, ms_s, obs_s, fvgs_s, liqz_s, tlb_s, sweep_s, atr_s)
-
+                ms_s = detect_ms(df_1h); obs_s = detect_obs(df_1h)
+                fvgs_s = detect_fvg(df_1h); liqz_s = liq_zones(df_1h)
+                tlb_s = detect_trendline(df_1h); sweep_s = detect_liquidity_sweep(df_1h)
+                persist_s = check_signal_persistence(df_1h, 60, 2, 10)
+                sig_s = make_signal(price_s, rsi_s, macd_s, funding_s, cvd_s, spot_cvd_s, vp_s, absorb_s,
+                                    oi_ch_s, tf_s, ms_s, obs_s, fvgs_s, liqz_s, tlb_s, sweep_s, atr_s, persist_s)
                 row_s = ss_df[ss_df['symbol'] == sym].iloc[0]
-
                 if sig_s['bull'] > ss_min_pts:
-                    buy_results.append({
-                        'Symbol': sym, 'Price': f"${row_s['lastPrice']:,.4f}",
-                        '24h %': f"{row_s['riseFallRate']:+.2f}%",
-                        'Vol ($M)': f"{row_s['vol_m']:.1f}",
-                        'Signal': sig_s['signal'], 'Bull Pts': sig_s['bull'], 'Bear Pts': sig_s['bear'],
+                    buy_results.append({'Symbol': sym, 'Price': f"${row_s['lastPrice']:,.4f}",
+                        '24h %': f"{row_s['riseFallRate']:+.2f}%", 'Vol ($M)': f"{row_s['vol_m']:.1f}",
+                        'Signal': sig_s['signal'], 'Bull': sig_s['bull'], 'Bear': sig_s['bear'],
+                        'Persistence': f"{persist_s['persistence']*100:.0f}% ({persist_s['hours_checked']}h)",
                         'Entry': f"${sig_s['entry']:,.4f}",
                         'SL': f"${sig_s['sl']:,.4f}" if sig_s['sl'] else '-',
-                        'TP1': f"${sig_s['tp1']:,.4f}" if sig_s['tp1'] else '-'
-                    })
+                        'TP1': f"${sig_s['tp1']:,.4f}" if sig_s['tp1'] else '-'})
                 elif sig_s['bear'] > ss_min_pts:
-                    sell_results.append({
-                        'Symbol': sym, 'Price': f"${row_s['lastPrice']:,.4f}",
-                        '24h %': f"{row_s['riseFallRate']:+.2f}%",
-                        'Vol ($M)': f"{row_s['vol_m']:.1f}",
-                        'Signal': sig_s['signal'], 'Bull Pts': sig_s['bull'], 'Bear Pts': sig_s['bear'],
+                    sell_results.append({'Symbol': sym, 'Price': f"${row_s['lastPrice']:,.4f}",
+                        '24h %': f"{row_s['riseFallRate']:+.2f}%", 'Vol ($M)': f"{row_s['vol_m']:.1f}",
+                        'Signal': sig_s['signal'], 'Bull': sig_s['bull'], 'Bear': sig_s['bear'],
+                        'Persistence': f"{persist_s['persistence']*100:.0f}% ({persist_s['hours_checked']}h)",
                         'Entry': f"${sig_s['entry']:,.4f}",
                         'SL': f"${sig_s['sl']:,.4f}" if sig_s['sl'] else '-',
-                        'TP1': f"${sig_s['tp1']:,.4f}" if sig_s['tp1'] else '-'
-                    })
-            except Exception:
-                pass
+                        'TP1': f"${sig_s['tp1']:,.4f}" if sig_s['tp1'] else '-'})
+            except: pass
             progress.progress((i+1)/len(ss_symbols))
-
-        status.text(f"✅ Strong Signal Scan Complete! {len(ss_symbols)} coins scanned.")
+        status.text(f"✅ Scan Complete! {len(ss_symbols)} coins scanned.")
         st.markdown(f"### 📊 Results: {len(buy_results)} Bullish | {len(sell_results)} Bearish")
         if buy_results:
-            st.subheader(f"🟢 Strong BUY Signals ({len(buy_results)})")
+            st.subheader(f"🟢 Strong BUY ({len(buy_results)})")
             st.dataframe(pd.DataFrame(buy_results), use_container_width=True, hide_index=True)
-        else: st.info("Koi Strong BUY nahi mila.")
         if sell_results:
-            st.subheader(f"🔴 Strong SELL Signals ({len(sell_results)})")
+            st.subheader(f"🔴 Strong SELL ({len(sell_results)})")
             st.dataframe(pd.DataFrame(sell_results), use_container_width=True, hide_index=True)
-        else: st.info("Koi Strong SELL nahi mila.")
 
 st.markdown("---")
 
@@ -745,68 +743,51 @@ with c1:
     sel_dd = st.selectbox("Dropdown:", all_sym, index=di, key="dd")
 with c2:
     sel_txt = st.text_input("Ya likho:", key="txt")
-
-if sel_txt.strip() and sel_txt.strip().upper() in all_sym:
-    SYM = sel_txt.strip().upper()
-else:
-    SYM = sel_dd
-
+if sel_txt.strip() and sel_txt.strip().upper() in all_sym: SYM = sel_txt.strip().upper()
+else: SYM = sel_dd
 st.markdown(f"### ✅ Selected: `{SYM}`")
 ccy = SYM.replace("_USDT", "")
 
-# Volume Warning
 crow = tickers[tickers['symbol'] == SYM]
 if not crow.empty:
-    co = crow.iloc[0]
-    vol_m = co['volume24'] / 1_000_000
+    co = crow.iloc[0]; vol_m = co['volume24'] / 1_000_000
     m1, m2 = st.columns(2)
     m1.metric("Price", f"${co['lastPrice']:,.4f}", f"{co['riseFallRate']:.2f}%")
     m2.metric("24h Volume", f"${co['volume24']:,.0f}")
-    if vol_m < 20:
-        st.error(f"⚠️ **LOW VOLUME WARNING:** Sirf ${vol_m:.1f}M volume hai. Trade mat karo.")
+    if vol_m < 20: st.error(f"⚠️ LOW VOLUME: ${vol_m:.1f}M. Trade mat karo.")
 
-# Fetch data
-klines_15m = fetch_klines(SYM, "Min15", 200)
-klines_1h = fetch_klines(SYM, "Min60", 200)
-klines_4h = fetch_klines(SYM, "Hour4", 200)
-
-if klines_1h.empty:
-    st.warning(f"{SYM} ka data nahi mila.")
-    st.stop()
+klines_15m = fetch_klines(SYM, "Min15", 300)
+klines_1h = fetch_klines(SYM, "Min60", 300)
+klines_4h = fetch_klines(SYM, "Hour4", 300)
+if klines_1h.empty: st.warning("Data nahi mila."); st.stop()
 
 price = float(klines_1h['close'].iloc[-1])
-rsi = calc_rsi(klines_1h)
-macd = calc_macd(klines_1h)
-vp = calc_vp(klines_1h)
-absorb = calc_absorption(klines_1h)
-atr = calc_atr(klines_1h)
-funding = fetch_funding(SYM)
-cvd_df = fetch_cvd(ccy, "CONTRACTS")
-cvd = float(cvd_df['CVD'].iloc[-1]) if not cvd_df.empty else None
-spot_cvd_df = fetch_cvd(ccy, "SPOT")
-spot_cvd = float(spot_cvd_df['CVD'].iloc[-1]) if not spot_cvd_df.empty else None
-oi_df = fetch_oi(ccy)
-oi_ch = None
+rsi = calc_rsi(klines_1h); macd = calc_macd(klines_1h); vp = calc_vp(klines_1h)
+absorb = calc_absorption(klines_1h); atr = calc_atr(klines_1h); funding = fetch_funding(SYM)
+cvd_df = fetch_cvd(ccy, "CONTRACTS"); cvd = float(cvd_df['CVD'].iloc[-1]) if not cvd_df.empty else None
+spot_cvd_df = fetch_cvd(ccy, "SPOT"); spot_cvd = float(spot_cvd_df['CVD'].iloc[-1]) if not spot_cvd_df.empty else None
+oi_df = fetch_oi(ccy); oi_ch = None
 if not oi_df.empty and len(oi_df) > 1:
     oi_ch = ((oi_df['oi'].iloc[-1] - oi_df['oi'].iloc[0]) / oi_df['oi'].iloc[0]) * 100
 
 tf_trends = {'15m': get_trend(klines_15m), '1H': get_trend(klines_1h), '4H': get_trend(klines_4h)}
-ms = detect_ms(klines_1h)
-obs = detect_obs(klines_1h)
-fvgs = detect_fvg(klines_1h)
-liqz = liq_zones(klines_1h)
-tlb = detect_trendline(klines_1h)
-sweep = detect_liquidity_sweep(klines_1h)
+ms = detect_ms(klines_1h); obs = detect_obs(klines_1h); fvgs = detect_fvg(klines_1h)
+liqz = liq_zones(klines_1h); tlb = detect_trendline(klines_1h); sweep = detect_liquidity_sweep(klines_1h)
+
+# NEW: Persistence + Hold Time
+persistence = check_signal_persistence(klines_1h, 60, 2, 10)
 
 sig = make_signal(price, rsi, macd, funding, cvd, spot_cvd, vp, absorb, oi_ch,
-                  tf_trends, ms, obs, fvgs, liqz, tlb, sweep, atr)
+                  tf_trends, ms, obs, fvgs, liqz, tlb, sweep, atr, persistence)
+
+# Hold time estimate
+signal_dir = 1 if "BUY" in sig['signal'] else (-1 if "SELL" in sig['signal'] else 0)
+hold_est = estimate_hold_time(klines_1h, atr, signal_dir, vp, price)
 
 # Signal display
 st.header(f"🎯 Signal: {SYM}")
 p1, p2, p3 = st.columns(3)
-p1.metric("🟢 BUY", f"{sig['bp']}%")
-p2.metric("🔴 SELL", f"{sig['sp']}%")
-p3.metric("🟡 HOLD", f"{sig['hp']}%")
+p1.metric("🟢 BUY", f"{sig['bp']}%"); p2.metric("🔴 SELL", f"{sig['sp']}%"); p3.metric("🟡 HOLD", f"{sig['hp']}%")
 
 chart = go.Figure(go.Bar(x=['BUY','SELL','HOLD'], y=[sig['bp'], sig['sp'], sig['hp']],
     marker_color=['#00ff88','#ff4444','#ffaa00'],
@@ -831,24 +812,36 @@ with f2:
 
 if sig['tp1']:
     t1, t2, t3 = st.columns(3)
-    t1.metric("TP1", f"${sig['tp1']:,.4f}")
-    t2.metric("TP2", f"${sig['tp2']:,.4f}")
-    t3.metric("TP3", f"${sig['tp3']:,.4f}")
+    t1.metric("TP1", f"${sig['tp1']:,.4f}"); t2.metric("TP2", f"${sig['tp2']:,.4f}"); t3.metric("TP3", f"${sig['tp3']:,.4f}")
+
+# ==================== NEW: PERSISTENCE & HOLD TIME SECTION ====================
+st.header("⏳ Signal Quality & Hold Time")
+q1, q2, q3 = st.columns(3)
+with q1:
+    st.metric("Persistence", persistence['status'], f"{persistence['persistence']*100:.0f}%")
+with q2:
+    st.metric("Hours Analyzed", f"{persistence['hours_checked']}h",
+              f"{persistence['up_candles']}↑ / {persistence['down_candles']}↓")
+with q3:
+    if signal_dir != 0:
+        st.metric("Est. Hold Time", f"{hold_est['min_hours']}h - {hold_est['max_hours']}h",
+                  f"Target: ${hold_est['target_price']:,.4f}")
+    else:
+        st.metric("Est. Hold Time", "N/A")
+
+st.caption(f"📊 {hold_est['reason']} | Data window: {persistence['hours_checked']} hours analyzed")
 
 with st.expander("📋 Full Analysis"):
     st.markdown(f"**Bull:** {sig['bull']} | **Bear:** {sig['bear']}")
-    for d in sig['details']:
-        st.write(f"• {d}")
+    for d in sig['details']: st.write(f"• {d}")
     st.markdown("**Reasons:**")
-    for r in sig['reasons']:
-        st.write(f"✅ {r}")
+    for r in sig['reasons']: st.write(f"✅ {r}")
 
 # Spot vs Futures
-st.header("🔄 Spot vs Futures Analysis")
+st.header("🔄 Spot vs Futures")
 if spot_cvd is not None and cvd is not None:
     sf1, sf2 = st.columns(2)
-    sf1.metric("Spot CVD", f"{spot_cvd:,.0f}")
-    sf2.metric("Futures CVD", f"{cvd:,.0f}")
+    sf1.metric("Spot CVD", f"{spot_cvd:,.0f}"); sf2.metric("Futures CVD", f"{cvd:,.0f}")
     if spot_cvd > 0 and cvd < 0: st.success("🟢 Bullish Divergence")
     elif spot_cvd < 0 and cvd > 0: st.error("🔴 Bearish Divergence")
     else: st.info("Same direction")
@@ -857,9 +850,7 @@ else: st.caption("Spot CVD data nahi mila.")
 # MTF
 st.header("⏱️ MTF Trends")
 mt1, mt2, mt3 = st.columns(3)
-mt1.metric("15m", tf_trends['15m'][1])
-mt2.metric("1H", tf_trends['1H'][1])
-mt3.metric("4H", tf_trends['4H'][1])
+mt1.metric("15m", tf_trends['15m'][1]); mt2.metric("1H", tf_trends['1H'][1]); mt3.metric("4H", tf_trends['4H'][1])
 
 # Trendline + Sweep
 st.header("📐 Trendline & Sweep")
@@ -894,15 +885,12 @@ with i4:
 
 if vp:
     v1, v2, v3 = st.columns(3)
-    v1.metric("POC", f"${vp['POC']:,.4f}")
-    v2.metric("VAH", f"${vp['VAH']:,.4f}")
-    v3.metric("VAL", f"${vp['VAL']:,.4f}")
+    v1.metric("POC", f"${vp['POC']:,.4f}"); v2.metric("VAH", f"${vp['VAH']:,.4f}"); v3.metric("VAL", f"${vp['VAL']:,.4f}")
 
 # Chart
 st.header(f"📈 {SYM} (1H)")
-fig = go.Figure(data=[go.Candlestick(
-    x=klines_1h['time'], open=klines_1h['open'], high=klines_1h['high'],
-    low=klines_1h['low'], close=klines_1h['close'])])
+fig = go.Figure(data=[go.Candlestick(x=klines_1h['time'], open=klines_1h['open'],
+    high=klines_1h['high'], low=klines_1h['low'], close=klines_1h['close'])])
 if vp:
     fig.add_hline(y=vp['POC'], line_dash="dash", line_color="yellow", annotation_text="POC")
     fig.add_hline(y=vp['VAH'], line_dash="dot", line_color="green", annotation_text="VAH")
@@ -913,9 +901,9 @@ st.plotly_chart(fig, use_container_width=True)
 st.sidebar.markdown("---")
 st.sidebar.header("✅ Active Parameters")
 st.sidebar.markdown("""
-1-16: RSI, MACD, Funding, CVD, Spot CVD, Divergence, VP, Absorption, OI, MTF, MS, OB, FVG, Liq, Trendline, Sweep
-17. Strong Buy/Sell Labels
-18. **Trendline Scanner** (15m/1H)
-19. **Strong Signal Scanner** (>8 pts)
+1-16: Standard
+17. **Signal Persistence (2-10h)**
+18. **Hold Time Estimate**
+19. **Multi-Candle Confirmation**
 """)
 st.sidebar.button("🔄 Refresh", on_click=lambda: st.cache_data.clear())
