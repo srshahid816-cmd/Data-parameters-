@@ -35,11 +35,11 @@ if MODE == "🤖 AI Chatbot":
     st.title("🤖 AI Chatbot")
 
     if not _groq_ok:
-        st.error("`groq` library install nahi hai. `requirements.txt` mein `groq>=0.11.0` add karo.")
+        st.error("`groq` library install nahi hai.")
         st.stop()
 
     if not _groq_key:
-        st.error("GROQ_API_KEY nahi mila. Streamlit Cloud → Settings → Secrets mein daalo.")
+        st.error("GROQ_API_KEY nahi mila. Secrets mein daalo.")
         st.code('GROQ_API_KEY = "gsk_xxxxxxxxxxxxx"', language="toml")
         st.stop()
 
@@ -61,14 +61,11 @@ if MODE == "🤖 AI Chatbot":
         index=0
     )
 
-    temp = st.sidebar.slider("Temperature (creativity)", 0.0, 1.5, 0.7, 0.1)
+    temp = st.sidebar.slider("Temperature", 0.0, 1.5, 0.7, 0.1)
     max_tok = st.sidebar.slider("Max Response Length", 256, 4096, 1024, 256)
 
-    sys_prompt = st.sidebar.text_area(
-        "System Prompt (AI ka role)",
-        value="You are a helpful AI assistant. Answer clearly and concisely.",
-        height=100
-    )
+    sys_prompt = st.sidebar.text_area("System Prompt",
+        "You are a helpful AI assistant. Answer clearly and concisely.", height=100)
 
     if st.sidebar.button("🗑️ Clear Chat"):
         st.session_state.messages = []
@@ -85,7 +82,6 @@ if MODE == "🤖 AI Chatbot":
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
-
         with st.chat_message("assistant"):
             placeholder = st.empty()
             full_response = ""
@@ -106,7 +102,6 @@ if MODE == "🤖 AI Chatbot":
             except Exception as e:
                 full_response = f"Error: {e}"
                 placeholder.error(full_response)
-
         st.session_state.messages.append({"role": "assistant", "content": full_response})
 
     st.sidebar.markdown("---")
@@ -114,8 +109,8 @@ if MODE == "🤖 AI Chatbot":
     st.stop()
 
 # ==================== DASHBOARD MODE ====================
-st.title("📊 Professional Crypto Dashboard v3")
-st.caption(f"Last: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | MEXC + OKX | MTF + SMC + Trendline")
+st.title("📊 Professional Crypto Dashboard v5")
+st.caption(f"Last: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | MEXC + OKX | MTF + SMC + Trendline Scanner")
 
 MEXC_BASE = "https://contract.mexc.com"
 OKX_BASE = "https://www.okx.com"
@@ -259,7 +254,7 @@ def calc_absorption(df):
     except:
         return None
 
-# ==================== MULTI-TIMEFRAME TREND ====================
+# ==================== TREND ====================
 def get_trend(df, k=3):
     if df is None or len(df) < 50: return 0, "N/A"
     try:
@@ -307,10 +302,6 @@ def detect_ms(df, k=3):
 
 # ==================== TRENDLINE BREAKOUT ====================
 def detect_trendline(df, window=5):
-    """
-    Detect trendline breakout.
-    Returns: {'breakout': 1 (bullish), -1 (bearish), 0 (none), 'status': str, 'details': list}
-    """
     res = {'breakout': 0, 'status': 'No Trendline', 'details': []}
     try:
         d = df.copy().reset_index(drop=True)
@@ -328,7 +319,6 @@ def detect_trendline(df, window=5):
         cur_close = close[-1]
         prev_close = close[-2]
 
-        # Downtrend line (connect swing highs) -> Bullish breakout
         if len(ph) >= 2:
             i1, i2 = ph[-2], ph[-1]
             if i2 > i1:
@@ -342,7 +332,6 @@ def detect_trendline(df, window=5):
                     res['details'] = [f"Broke above: ${tl_cur:,.4f}", "Wait 30-45 min confirmation"]
                     return res
 
-        # Uptrend line (connect swing lows) -> Bearish breakout
         if len(pl) >= 2:
             i1, i2 = pl[-2], pl[-1]
             if i2 > i1:
@@ -420,7 +409,6 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
     bull = 0; bear = 0
     reasons = []; details = []
 
-    # 1. RSI
     if rsi:
         if rsi < 30: bull += 3; reasons.append("RSI Oversold"); details.append(f"RSI={rsi:.1f} → Buy")
         elif rsi < 40: bull += 1.5; details.append(f"RSI={rsi:.1f} → Mild Bullish")
@@ -428,7 +416,6 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
         elif rsi > 60: bear += 1.5; details.append(f"RSI={rsi:.1f} → Mild Bearish")
         else: details.append(f"RSI={rsi:.1f} → Neutral")
 
-    # 2. MACD
     if macd:
         if macd['hist'] > 0 and macd['macd'] > macd['signal']:
             bull += 2; reasons.append("MACD Bullish"); details.append("MACD: Bullish")
@@ -437,35 +424,29 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
         elif macd['hist'] > 0: bull += 1; details.append("MACD: Mild Bullish")
         elif macd['hist'] < 0: bear += 1; details.append("MACD: Mild Bearish")
 
-    # 3. Funding
     if funding is not None:
         if funding > 0.05: bear += 2; reasons.append("High Funding"); details.append(f"Funding={funding:.4f}% → Bearish")
         elif funding < -0.05: bull += 2; reasons.append("Neg Funding"); details.append(f"Funding={funding:.4f}% → Bullish")
         else: details.append(f"Funding={funding:.4f}% → Neutral")
 
-    # 4. CVD
     if cvd is not None:
         if cvd > 0: bull += 2; reasons.append("Buyers (CVD+)"); details.append(f"CVD={cvd:,.0f} → Buyers")
         else: bear += 2; reasons.append("Sellers (CVD-)"); details.append(f"CVD={cvd:,.0f} → Sellers")
 
-    # 5. VP
     if vp and price:
         if price < vp['VAL']: bull += 2; reasons.append("Below VA"); details.append("Price<VAL → Bullish")
         elif price > vp['VAH']: bear += 2; reasons.append("Above VA"); details.append("Price>VAH → Bearish")
         elif price < vp['POC']: bull += 0.5; details.append("Price<POC → Slight Bullish")
         else: bear += 0.5; details.append("Price>POC → Slight Bearish")
 
-    # 6. Absorption
     if absorb and absorb > 1.5:
         reasons.append("High Absorption"); details.append(f"Absorption={absorb:.2f}")
 
-    # 7. OI
     if oi_ch is not None:
         if oi_ch > 2: bull += 1.5; reasons.append("OI Increasing"); details.append(f"OI +{oi_ch:.2f}%")
         elif oi_ch < -2: bear += 1.5; reasons.append("OI Decreasing"); details.append(f"OI {oi_ch:.2f}%")
         else: details.append(f"OI {oi_ch:.2f}% (Neutral)")
 
-    # 8. MTF
     t15 = tf.get('15m', (0, 'N/A'))[0]
     t1h = tf.get('1H', (0, 'N/A'))[0]
     t4h = tf.get('4H', (0, 'N/A'))[0]
@@ -476,14 +457,12 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
     else:
         details.append(f"MTF: 15m={tf['15m'][1]} 1H={tf['1H'][1]} 4H={tf['4H'][1]}")
 
-    # 9. Market Structure
     if ms['bos'] == 1: bull += 2.5; reasons.append("Bullish BoS"); details.append(ms['status'])
     elif ms['bos'] == -1: bear += 2.5; reasons.append("Bearish BoS"); details.append(ms['status'])
     elif ms['choch'] == 1: bull += 2; reasons.append("Bullish CHoCH"); details.append(ms['status'])
     elif ms['choch'] == -1: bear += 2; reasons.append("Bearish CHoCH"); details.append(ms['status'])
     else: details.append(f"Structure: {ms['status']}")
 
-    # 10. Order Blocks
     if obs and price:
         in_bull_ob = any(o['type']=='bullish' and o['bottom'] <= price <= o['top'] for o in obs)
         in_bear_ob = any(o['type']=='bearish' and o['bottom'] <= price <= o['top'] for o in obs)
@@ -491,14 +470,12 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
         if in_bear_ob: bear += 2; reasons.append("In Bearish OB"); details.append("Price inside Bearish OB")
         if not in_bull_ob and not in_bear_ob: details.append("Not in OB")
 
-    # 11. FVG
     if fvgs and price:
         in_bfvg = any(f['type']=='bullish' and f['bottom'] <= price <= f['top'] for f in fvgs)
         in_sfvg = any(f['type']=='bearish' and f['bottom'] <= price <= f['top'] for f in fvgs)
         if in_bfvg: bull += 1.5; reasons.append("In Bullish FVG"); details.append("Price in Bullish FVG")
         if in_sfvg: bear += 1.5; reasons.append("In Bearish FVG"); details.append("Price in Bearish FVG")
 
-    # 12. Liquidation Zones
     if liqz and price:
         for z in liqz:
             if abs(price - z['price'])/price < 0.005:
@@ -507,7 +484,6 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
                 else:
                     bear += 1; reasons.append("Near Buy-Side Liq"); details.append(f"Buy-side liq @ ${z['price']:,.4f}")
 
-    # 13. Trendline Breakout (SKIP IF 0)
     if tlb['breakout'] == 1:
         bull += 3
         reasons.append("Bullish Trendline Breakout")
@@ -523,7 +499,6 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
     else:
         details.append(f"Trendline: {tlb['status']}")
 
-    # ==================== PROBABILITY ====================
     total = bull + bear
     if total == 0:
         bp, sp, hp = 33.3, 33.3, 33.4
@@ -535,7 +510,6 @@ def make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch, tf, ms, obs, 
         sp = min(95, sp+10); bp = max(5, bp-5)
     hp = max(0, 100-bp-sp)
 
-    # ==================== STRONG BUY / SELL LOGIC ====================
     strong_buy = bull >= 10 and bull >= bear * 2
     strong_sell = bear >= 10 and bear >= bull * 2
 
@@ -573,7 +547,99 @@ if tickers.empty:
 sorted_df = tickers.sort_values('riseFallRate', ascending=False)
 all_sym = sorted_df['symbol'].tolist()
 
-st.markdown("### 🔍 Coin Select Karo")
+# ==================== TRENDLINE SCANNER (UPDATED: 15m + 1H) ====================
+st.header("📐 Trendline Scanner — 15m Aor 1H Dono Par Breakout Dhoondo")
+st.caption("Yeh scanner sirf woh coins dikhayega jahan 15m AUR 1H dono par trendline breakout ho raha ho.")
+
+sc1, sc2 = st.columns(2)
+with sc1:
+    scan_top_n = st.selectbox("Kitne top coins scan karne hain?", [30, 50, 100, 150], index=1)
+with sc2:
+    min_volume_m = st.number_input("Min 24h Volume ($M)", min_value=0.0, value=5.0, step=1.0)
+
+if st.button("🚀 Scan Trendlines (15m + 1H)", type="primary"):
+    scan_df = sorted_df.copy()
+    scan_df['vol_m'] = scan_df['volume24'] / 1_000_000
+    scan_df = scan_df[scan_df['vol_m'] >= min_volume_m]
+    scan_df = scan_df.head(scan_top_n)
+
+    scan_symbols = scan_df['symbol'].tolist()
+
+    if not scan_symbols:
+        st.warning("Koi coin filter pass nahi hua. Min volume kam karo.")
+    else:
+        progress = st.progress(0)
+        status = st.empty()
+        bull_results = []
+        bear_results = []
+        errors = []
+
+        for i, sym in enumerate(scan_symbols):
+            status.text(f"Scanning {sym}... ({i+1}/{len(scan_symbols)})")
+            try:
+                df_15m = fetch_klines(sym, "Min15", 200)
+                df_1h = fetch_klines(sym, "Min60", 200)
+
+                if df_15m.empty or df_1h.empty or len(df_15m) < 50 or len(df_1h) < 50:
+                    errors.append(sym)
+                    progress.progress((i+1)/len(scan_symbols))
+                    continue
+
+                tlb_15m = detect_trendline(df_15m)
+                tlb_1h = detect_trendline(df_1h)
+
+                # Bullish: BOTH 15m and 1H bullish
+                if tlb_15m['breakout'] == 1 and tlb_1h['breakout'] == 1:
+                    row = scan_df[scan_df['symbol'] == sym].iloc[0]
+                    bull_results.append({
+                        'Symbol': sym,
+                        'Price': f"${row['lastPrice']:,.4f}",
+                        '24h %': f"{row['riseFallRate']:+.2f}%",
+                        'Volume ($M)': f"{row['vol_m']:.1f}",
+                        '15m Breakout': '🟢 Bullish',
+                        '1H Breakout': '🟢 Bullish',
+                        'Detail': tlb_15m['details'][0] if tlb_15m['details'] else '-'
+                    })
+                # Bearish: BOTH 15m and 1H bearish
+                elif tlb_15m['breakout'] == -1 and tlb_1h['breakout'] == -1:
+                    row = scan_df[scan_df['symbol'] == sym].iloc[0]
+                    bear_results.append({
+                        'Symbol': sym,
+                        'Price': f"${row['lastPrice']:,.4f}",
+                        '24h %': f"{row['riseFallRate']:+.2f}%",
+                        'Volume ($M)': f"{row['vol_m']:.1f}",
+                        '15m Breakout': '🔴 Bearish',
+                        '1H Breakout': '🔴 Bearish',
+                        'Detail': tlb_15m['details'][0] if tlb_15m['details'] else '-'
+                    })
+            except Exception as e:
+                errors.append(f"{sym}: {e}")
+            progress.progress((i+1)/len(scan_symbols))
+
+        status.text(f"✅ Scan Complete! {len(scan_symbols)} coins scanned.")
+
+        st.markdown("---")
+        st.markdown(f"### 📊 Results: {len(bull_results)} Bullish | {len(bear_results)} Bearish Breakouts (15m + 1H)")
+
+        if bull_results:
+            st.subheader(f"🟢 Bullish Trendline Breakouts ({len(bull_results)})")
+            st.dataframe(pd.DataFrame(bull_results), use_container_width=True, hide_index=True)
+        else:
+            st.info("Koi Bullish trendline breakout nahi mila (15m + 1H dono par).")
+
+        if bear_results:
+            st.subheader(f"🔴 Bearish Trendline Breakouts ({len(bear_results)})")
+            st.dataframe(pd.DataFrame(bear_results), use_container_width=True, hide_index=True)
+        else:
+            st.info("Koi Bearish trendline breakout nahi mila (15m + 1H dono par).")
+
+        if not bull_results and not bear_results:
+            st.warning("⚠️ Kisi bhi coin mein 15m aur 1H dono par trendline breakout nahi mila. Market range-bound hai shayad. Dobara try karo thodi der baad.")
+
+st.markdown("---")
+
+# ==================== COIN SELECTOR ====================
+st.markdown("### 🔍 Coin Select Karo (Detailed Analysis Ke Liye)")
 c1, c2 = st.columns([2,2])
 with c1:
     di = all_sym.index('BTC_USDT') if 'BTC_USDT' in all_sym else 0
@@ -651,7 +717,7 @@ tlb = detect_trendline(klines_1h)
 sig = make_signal(price, rsi, macd, funding, cvd, vp, absorb, oi_ch,
                   tf_trends, ms, obs, fvgs, liqz, tlb, atr)
 
-# ==================== DISPLAY ====================
+# Signal display
 st.header(f"🎯 Signal: {SYM}")
 
 p1, p2, p3 = st.columns(3)
@@ -669,7 +735,6 @@ chart = go.Figure(go.Bar(
 chart.update_layout(height=220, template="plotly_dark", showlegend=False, yaxis_range=[0,100])
 st.plotly_chart(chart, use_container_width=True)
 
-# Trendline alert
 if tlb['breakout'] != 0:
     st.warning(f"⚠️ **{tlb['status']}** — 30-45 mins wait karo confirmation ke liye.")
 
@@ -697,11 +762,10 @@ if sig['tp1']:
     t3.metric("TP3 (5x ATR)", f"${sig['tp3']:,.4f}")
     st.caption(f"ATR: ${atr:,.4f} — SL/TP ATR-based (3-12h trades)")
 
-# Strong Signal Summary
 if sig['strong_buy']:
-    st.success(f"🚀 **STRONG BUY CONFIRMED** — Bull Points: {sig['bull']} (High Conviction)")
+    st.success(f"🚀 **STRONG BUY CONFIRMED** — Bull Points: {sig['bull']}")
 elif sig['strong_sell']:
-    st.error(f"🔻 **STRONG SELL CONFIRMED** — Bear Points: {sig['bear']} (High Conviction)")
+    st.error(f"🔻 **STRONG SELL CONFIRMED** — Bear Points: {sig['bear']}")
 
 with st.expander("📋 Full Analysis"):
     st.markdown(f"**Bull Points:** {sig['bull']}  |  **Bear Points:** {sig['bear']}")
@@ -720,7 +784,7 @@ mt2.metric("1H", tf_trends['1H'][1])
 mt3.metric("4H", tf_trends['4H'][1])
 
 # Trendline
-st.header("📐 Trendline Breakout")
+st.header("📐 Trendline Breakout (1H)")
 if tlb['breakout'] == 1:
     st.success(f"🟢 {tlb['status']}")
     for d in tlb['details']:
@@ -813,7 +877,8 @@ st.sidebar.markdown("""
 10. Order Blocks
 11. Fair Value Gaps
 12. Liquidation Zones (est.)
-13. **Trendline Breakout** ⬅️ NEW
-14. **Strong Buy/Sell Labels** ⬅️ NEW
+13. Trendline Breakout
+14. Strong Buy/Sell Labels
+15. **Trendline Scanner (15m + 1H Both)**
 """)
 st.sidebar.button("🔄 Refresh", on_click=lambda: st.cache_data.clear())
