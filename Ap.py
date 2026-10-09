@@ -99,8 +99,8 @@ if MODE == "🤖 AI Chatbot":
     st.stop()
 
 # ==================== DASHBOARD MODE ====================
-st.title("📊 Professional Crypto Dashboard v6")
-st.caption(f"Last: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | MEXC + OKX | Spot+Futures | Liquidity Sweep")
+st.title("📊 Professional Crypto Dashboard v7")
+st.caption(f"Last: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | MEXC + OKX | Strong Signal Scanner")
 
 MEXC_BASE = "https://contract.mexc.com"
 MEXC_SPOT = "https://api.mexc.com"
@@ -147,25 +147,6 @@ def fetch_klines(symbol, interval="Min60", limit=200):
     return pd.DataFrame()
 
 @st.cache_data(ttl=300)
-def fetch_spot_klines(symbol_base, interval="60m", limit=200):
-    """MEXC Spot API (symbol without _USDT)"""
-    try:
-        spot_sym = symbol_base + "USDT"
-        r = requests.get(f"{MEXC_SPOT}/api/v3/klines",
-                        params={"symbol": spot_sym, "interval": interval, "limit": limit}, timeout=15)
-        r.raise_for_status()
-        d = r.json()
-        if isinstance(d, list) and len(d) > 0:
-            df = pd.DataFrame(d, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'trades', 'tb_base', 'tb_quote', 'ignore'])
-            df['time'] = pd.to_datetime(df['time'], unit='ms')
-            for c in ['open', 'high', 'low', 'close', 'volume']:
-                df[c] = pd.to_numeric(df[c], errors='coerce')
-            return df[['time', 'open', 'high', 'low', 'close', 'volume']]
-    except:
-        pass
-    return pd.DataFrame()
-
-@st.cache_data(ttl=300)
 def fetch_funding(symbol):
     try:
         r = requests.get(f"{MEXC_BASE}/api/v1/contract/funding_rate/{symbol}", timeout=15)
@@ -177,33 +158,16 @@ def fetch_funding(symbol):
     return None
 
 @st.cache_data(ttl=300)
-def fetch_cvd(ccy):
+def fetch_cvd(ccy, inst_type="CONTRACTS"):
     try:
         r = requests.get(f"{OKX_BASE}/api/v5/rubik/stat/taker-volume",
-                        params={"ccy": ccy, "instType": "CONTRACTS", "period": "1H"}, timeout=15)
+                        params={"ccy": ccy, "instType": inst_type, "period": "1H"}, timeout=15)
         d = r.json()
         if d.get('code') == '0' and d.get('data'):
             df = pd.DataFrame(d['data'], columns=['timestamp', 'sellVol', 'buyVol'])
             df['buyVol'] = pd.to_numeric(df['buyVol'])
             df['sellVol'] = pd.to_numeric(df['sellVol'])
             df['CVD'] = df['buyVol'] - df['sellVol']
-            return df
-    except:
-        pass
-    return pd.DataFrame()
-
-@st.cache_data(ttl=300)
-def fetch_spot_cvd(ccy):
-    """OKX Spot Taker Volume"""
-    try:
-        r = requests.get(f"{OKX_BASE}/api/v5/rubik/stat/taker-volume",
-                        params={"ccy": ccy, "instType": "SPOT", "period": "1H"}, timeout=15)
-        d = r.json()
-        if d.get('code') == '0' and d.get('data'):
-            df = pd.DataFrame(d['data'], columns=['timestamp', 'sellVol', 'buyVol'])
-            df['buyVol'] = pd.to_numeric(df['buyVol'])
-            df['sellVol'] = pd.to_numeric(df['sellVol'])
-            df['SpotCVD'] = df['buyVol'] - df['sellVol']
             return df
     except:
         pass
@@ -327,24 +291,17 @@ def detect_ms(df, k=3):
     except:
         return res
 
-# ==================== TRENDLINE BREAKOUT ====================
+# ==================== TRENDLINE ====================
 def detect_trendline(df, window=5):
     res = {'breakout': 0, 'status': 'No Trendline', 'details': []}
     try:
         d = df.copy().reset_index(drop=True)
-        highs = d['high'].values
-        lows = d['low'].values
-        close = d['close'].values
-
+        highs = d['high'].values; lows = d['low'].values; close = d['close'].values
         ph = argrelextrema(highs, np.greater_equal, order=window)[0]
         pl = argrelextrema(lows, np.less_equal, order=window)[0]
-
-        if len(ph) < 2 and len(pl) < 2:
-            return res
-
+        if len(ph) < 2 and len(pl) < 2: return res
         cur_idx = len(d) - 1
-        cur_close = close[-1]
-        prev_close = close[-2]
+        cur_close = close[-1]; prev_close = close[-2]
 
         if len(ph) >= 2:
             i1, i2 = ph[-2], ph[-1]
@@ -371,26 +328,18 @@ def detect_trendline(df, window=5):
                     res['status'] = 'Bearish Trendline Breakout'
                     res['details'] = [f"Broke below: ${tl_cur:,.4f}"]
                     return res
-
         res['status'] = 'No Trendline Breakout (Skipped)'
         return res
     except:
         return res
 
-# ==================== LIQUIDITY SWEEP (NEW) ====================
+# ==================== LIQUIDITY SWEEP ====================
 def detect_liquidity_sweep(df, lookback=20):
-    """
-    Detect liquidity sweep (stop hunt):
-    Bullish sweep: long lower wick below recent low, then close back above
-    Bearish sweep: long upper wick above recent high, then close back below
-    """
     res = {'sweep': 0, 'status': 'No Sweep', 'details': []}
     try:
-        if df is None or len(df) < lookback + 5:
-            return res
+        if df is None or len(df) < lookback + 5: return res
         d = df.copy().reset_index(drop=True)
         recent = d.tail(lookback)
-
         for i in range(len(d) - 5, len(d)):
             candle = d.iloc[i]
             body = abs(candle['close'] - candle['open'])
@@ -398,25 +347,14 @@ def detect_liquidity_sweep(df, lookback=20):
             if rng == 0: continue
             lower_wick = min(candle['open'], candle['close']) - candle['low']
             upper_wick = candle['high'] - max(candle['open'], candle['close'])
-
-            # Bullish sweep: long lower wick + close above open, and swept a prior low
             if lower_wick > 2 * body and lower_wick / rng > 0.6:
                 prev_low = recent['low'].iloc[:-5].min() if len(recent) > 5 else candle['low']
                 if candle['low'] < prev_low:
-                    res['sweep'] = 1
-                    res['status'] = 'Bullish Liquidity Sweep (Stop Hunt)'
-                    res['details'] = [f"Swept low @ ${candle['low']:,.4f}", "Reversal up likely"]
-                    return res
-
-            # Bearish sweep: long upper wick + close below open
+                    res['sweep'] = 1; res['status'] = 'Bullish Liquidity Sweep'; return res
             if upper_wick > 2 * body and upper_wick / rng > 0.6:
                 prev_high = recent['high'].iloc[:-5].max() if len(recent) > 5 else candle['high']
                 if candle['high'] > prev_high:
-                    res['sweep'] = -1
-                    res['status'] = 'Bearish Liquidity Sweep (Stop Hunt)'
-                    res['details'] = [f"Swept high @ ${candle['high']:,.4f}", "Reversal down likely"]
-                    return res
-
+                    res['sweep'] = -1; res['status'] = 'Bearish Liquidity Sweep'; return res
         return res
     except:
         return res
@@ -458,7 +396,7 @@ def detect_fvg(df, lookback=50):
     except:
         return []
 
-# ==================== LIQUIDATION ZONES ====================
+# ==================== LIQ ZONES ====================
 def liq_zones(df, k=5):
     zones = []
     if df is None or len(df) < 30: return zones
@@ -467,10 +405,8 @@ def liq_zones(df, k=5):
         highs = d['high'].values; lows = d['low'].values
         ph = argrelextrema(highs, np.greater_equal, order=k)[0]
         pl = argrelextrema(lows, np.less_equal, order=k)[0]
-        for idx in ph[-3:]:
-            zones.append({'type': 'buy_side', 'price': float(highs[idx])})
-        for idx in pl[-3:]:
-            zones.append({'type': 'sell_side', 'price': float(lows[idx])})
+        for idx in ph[-3:]: zones.append({'type': 'buy_side', 'price': float(highs[idx])})
+        for idx in pl[-3:]: zones.append({'type': 'sell_side', 'price': float(lows[idx])})
         return zones
     except:
         return []
@@ -492,7 +428,6 @@ def make_signal(price, rsi, macd, funding, cvd, spot_cvd, vp, absorb, oi_ch, tf,
             bull += 2; reasons.append("MACD Bullish")
         elif macd['hist'] < 0 and macd['macd'] < macd['signal']:
             bear += 2; reasons.append("MACD Bearish")
-        details.append("MACD analyzed")
 
     if funding is not None:
         if funding > 0.05: bear += 2; reasons.append("High Funding")
@@ -504,25 +439,15 @@ def make_signal(price, rsi, macd, funding, cvd, spot_cvd, vp, absorb, oi_ch, tf,
         else: bear += 2; reasons.append("Futures Sellers (CVD-)")
         details.append(f"Futures CVD={cvd:,.0f}")
 
-    # ===== SPOT CVD (NEW) =====
     if spot_cvd is not None:
-        if spot_cvd > 0:
-            bull += 1.5; reasons.append("Spot Buyers Active")
-            details.append(f"Spot CVD={spot_cvd:,.0f} → Spot buying pressure")
-        else:
-            bear += 1.5; reasons.append("Spot Sellers Active")
-            details.append(f"Spot CVD={spot_cvd:,.0f} → Spot selling pressure")
-
-        # Divergence check
+        if spot_cvd > 0: bull += 1.5; reasons.append("Spot Buyers Active")
+        else: bear += 1.5; reasons.append("Spot Sellers Active")
+        details.append(f"Spot CVD={spot_cvd:,.0f}")
         if cvd is not None:
             if cvd < 0 and spot_cvd > 0:
-                bull += 1
-                reasons.append("Spot/Futures Bullish Divergence")
-                details.append("Spot buyers > Futures sellers → Bullish signal")
+                bull += 1; reasons.append("Spot/Futures Bullish Divergence")
             elif cvd > 0 and spot_cvd < 0:
-                bear += 1
-                reasons.append("Spot/Futures Bearish Divergence")
-                details.append("Spot sellers > Futures buyers → Bearish signal")
+                bear += 1; reasons.append("Spot/Futures Bearish Divergence")
 
     if vp and price:
         if price < vp['VAL']: bull += 2; reasons.append("Below VA")
@@ -531,21 +456,16 @@ def make_signal(price, rsi, macd, funding, cvd, spot_cvd, vp, absorb, oi_ch, tf,
         else: bear += 0.5
         details.append(f"VP: POC={vp['POC']:.4f}")
 
-    if absorb and absorb > 1.5:
-        reasons.append("High Absorption")
+    if absorb and absorb > 1.5: reasons.append("High Absorption")
 
     if oi_ch is not None:
         if oi_ch > 2: bull += 1.5; reasons.append("OI Increasing")
         elif oi_ch < -2: bear += 1.5; reasons.append("OI Decreasing")
         details.append(f"OI {oi_ch:.2f}%")
 
-    t15 = tf.get('15m', (0, 'N/A'))[0]
-    t1h = tf.get('1H', (0, 'N/A'))[0]
-    t4h = tf.get('4H', (0, 'N/A'))[0]
-    if t15 == 1 and t1h == 1 and t4h == 1:
-        bull += 3; reasons.append("MTF All Bullish")
-    elif t15 == -1 and t1h == -1 and t4h == -1:
-        bear += 3; reasons.append("MTF All Bearish")
+    t15 = tf.get('15m', (0, 'N/A'))[0]; t1h = tf.get('1H', (0, 'N/A'))[0]; t4h = tf.get('4H', (0, 'N/A'))[0]
+    if t15 == 1 and t1h == 1 and t4h == 1: bull += 3; reasons.append("MTF All Bullish")
+    elif t15 == -1 and t1h == -1 and t4h == -1: bear += 3; reasons.append("MTF All Bearish")
     details.append(f"MTF: 15m={tf['15m'][1]} 1H={tf['1H'][1]} 4H={tf['4H'][1]}")
 
     if ms['bos'] == 1: bull += 2.5; reasons.append("Bullish BoS")
@@ -569,73 +489,46 @@ def make_signal(price, rsi, macd, funding, cvd, spot_cvd, vp, absorb, oi_ch, tf,
     if liqz and price:
         for z in liqz:
             if abs(price - z['price'])/price < 0.005:
-                if z['type'] == 'sell_side':
-                    bull += 1; reasons.append("Near Sell-Side Liq")
-                else:
-                    bear += 1; reasons.append("Near Buy-Side Liq")
+                if z['type'] == 'sell_side': bull += 1; reasons.append("Near Sell-Side Liq")
+                else: bear += 1; reasons.append("Near Buy-Side Liq")
 
-    if tlb['breakout'] == 1:
-        bull += 3; reasons.append("Bullish Trendline Breakout")
-    elif tlb['breakout'] == -1:
-        bear += 3; reasons.append("Bearish Trendline Breakout")
+    if tlb['breakout'] == 1: bull += 3; reasons.append("Bullish Trendline Breakout")
+    elif tlb['breakout'] == -1: bear += 3; reasons.append("Bearish Trendline Breakout")
     details.append(f"Trendline: {tlb['status']}")
 
-    # ===== LIQUIDITY SWEEP (NEW) =====
-    if sweep['sweep'] == 1:
-        bull += 2.5
-        reasons.append("Bullish Liquidity Sweep (Stop Hunt)")
-        details.append("Sweep: Bullish reversal after stop hunt")
-        for d in sweep['details']:
-            details.append(f"  {d}")
-    elif sweep['sweep'] == -1:
-        bear += 2.5
-        reasons.append("Bearish Liquidity Sweep (Stop Hunt)")
-        details.append("Sweep: Bearish reversal after stop hunt")
-        for d in sweep['details']:
-            details.append(f"  {d}")
-    else:
-        details.append(f"Sweep: {sweep['status']}")
+    if sweep['sweep'] == 1: bull += 2.5; reasons.append("Bullish Liquidity Sweep")
+    elif sweep['sweep'] == -1: bear += 2.5; reasons.append("Bearish Liquidity Sweep")
+    details.append(f"Sweep: {sweep['status']}")
 
     total = bull + bear
-    if total == 0:
-        bp, sp, hp = 33.3, 33.3, 33.4
+    if total == 0: bp, sp, hp = 33.3, 33.3, 33.4
     else:
         bp = (bull/total)*100; sp = (bear/total)*100; hp = max(0, 100-bp-sp)
-    if bp > sp and bp > 50:
-        bp = min(95, bp+10); sp = max(5, sp-5)
-    elif sp > bp and sp > 50:
-        sp = min(95, sp+10); bp = max(5, bp-5)
+    if bp > sp and bp > 50: bp = min(95, bp+10); sp = max(5, sp-5)
+    elif sp > bp and sp > 50: sp = min(95, sp+10); bp = max(5, bp-5)
     hp = max(0, 100-bp-sp)
 
     strong_buy = bull >= 12 and bull >= bear * 2
     strong_sell = bear >= 12 and bear >= bull * 2
 
-    if strong_buy:
-        signal, conf = "STRONG BUY 🚀", bp
-    elif strong_sell:
-        signal, conf = "STRONG SELL 🔻", sp
-    elif bp >= 55:
-        signal, conf = "BUY", bp
-    elif sp >= 55:
-        signal, conf = "SELL", sp
-    else:
-        signal, conf = "WAIT / HOLD", hp
+    if strong_buy: signal, conf = "STRONG BUY 🚀", bp
+    elif strong_sell: signal, conf = "STRONG SELL 🔻", sp
+    elif bp >= 55: signal, conf = "BUY", bp
+    elif sp >= 55: signal, conf = "SELL", sp
+    else: signal, conf = "WAIT / HOLD", hp
 
     entry = price
     if atr is None: atr = entry * 0.02
-    if "BUY" in signal:
-        sl = entry - 1.5*atr; tp1 = entry + 2*atr; tp2 = entry + 3.5*atr; tp3 = entry + 5*atr
-    elif "SELL" in signal:
-        sl = entry + 1.5*atr; tp1 = entry - 2*atr; tp2 = entry - 3.5*atr; tp3 = entry - 5*atr
-    else:
-        sl = tp1 = tp2 = tp3 = None
+    if "BUY" in signal: sl = entry - 1.5*atr; tp1 = entry + 2*atr; tp2 = entry + 3.5*atr; tp3 = entry + 5*atr
+    elif "SELL" in signal: sl = entry + 1.5*atr; tp1 = entry - 2*atr; tp2 = entry - 3.5*atr; tp3 = entry - 5*atr
+    else: sl = tp1 = tp2 = tp3 = None
 
     return {'signal': signal, 'conf': conf, 'bp': round(bp,1), 'sp': round(sp,1), 'hp': round(hp,1),
             'bull': round(bull,1), 'bear': round(bear,1), 'reasons': reasons, 'details': details,
             'entry': entry, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3,
             'strong_buy': strong_buy, 'strong_sell': strong_sell}
 
-# ==================== MAIN ====================
+# ==================== MAIN DASHBOARD ====================
 tickers = fetch_tickers()
 if tickers.empty:
     st.error("MEXC data fetch nahi hua. Refresh karo.")
@@ -644,104 +537,120 @@ if tickers.empty:
 sorted_df = tickers.sort_values('riseFallRate', ascending=False)
 all_sym = sorted_df['symbol'].tolist()
 
-# ==================== TRENDLINE SCANNER (UPDATED) ====================
-st.header("📐 Trendline Scanner — Alag Filters Ke Saath")
-st.caption("15m aur 1H ko alag-alag filter karo. Sirf woh coins dikhayega jahan selected timeframe par breakout ho.")
+# ==================== STRONG SIGNAL SCANNER (NEW SECTION) ====================
+st.header("🎯 Strong Signal Scanner — Points > 8 Filter")
+st.caption("Yeh scanner top coins ko scan karega aur sirf woh dikhayega jahan Bull Points > 8 ya Bear Points > 8 hon.")
 
-sc1, sc2, sc3, sc4 = st.columns(4)
-with sc1:
-    scan_top_n = st.selectbox("Top coins scan", [50, 100, 200, 300], index=2)
-with sc2:
-    tf_filter = st.selectbox("Timeframe Filter", ["15m Only", "1H Only", "Both (15m + 1H)"], index=0)
-with sc3:
-    min_volume_m = st.number_input("Min 24h Volume ($M)", min_value=0.0, value=10.0, step=1.0)
-with sc4:
-    min_24h_change = st.number_input("Min 24h Change (%)", min_value=-100.0, value=-50.0, step=5.0)
+ss1, ss2, ss3 = st.columns(3)
+with ss1:
+    ss_top_n = st.selectbox("Top coins scan", [30, 50, 100, 200], index=1)
+with ss2:
+    ss_min_pts = st.number_input("Min Points (Buy/Sell)", min_value=5.0, value=8.0, step=0.5)
+with ss3:
+    ss_min_vol = st.number_input("Min 24h Volume ($M)", min_value=0.0, value=20.0, step=5.0)
 
-if st.button("🚀 Scan Trendlines", type="primary"):
-    scan_df = sorted_df.copy()
-    scan_df['vol_m'] = scan_df['volume24'] / 1_000_000
-    scan_df = scan_df[scan_df['vol_m'] >= min_volume_m]
-    scan_df = scan_df[scan_df['riseFallRate'] >= min_24h_change]
-    scan_df = scan_df.head(scan_top_n)
-    scan_symbols = scan_df['symbol'].tolist()
+if st.button("🚀 Scan Strong Signals", type="primary"):
+    ss_df = sorted_df.copy()
+    ss_df['vol_m'] = ss_df['volume24'] / 1_000_000
+    ss_df = ss_df[ss_df['vol_m'] >= ss_min_vol]
+    ss_df = ss_df.head(ss_top_n)
+    ss_symbols = ss_df['symbol'].tolist()
 
-    if not scan_symbols:
-        st.warning("Koi coin filter pass nahi hua.")
+    if not ss_symbols:
+        st.warning("Koi coin filter pass nahi hua. Min volume kam karo.")
     else:
         progress = st.progress(0)
         status = st.empty()
-        bull_results = []
-        bear_results = []
+        buy_results = []
+        sell_results = []
 
-        for i, sym in enumerate(scan_symbols):
-            status.text(f"Scanning {sym}... ({i+1}/{len(scan_symbols)})")
+        for i, sym in enumerate(ss_symbols):
+            status.text(f"Scanning {sym}... ({i+1}/{len(ss_symbols)})")
             try:
+                ccy_scan = sym.replace("_USDT", "")
                 df_15m = fetch_klines(sym, "Min15", 200)
                 df_1h = fetch_klines(sym, "Min60", 200)
+                df_4h = fetch_klines(sym, "Hour4", 200)
 
-                if df_15m.empty and df_1h.empty:
-                    progress.progress((i+1)/len(scan_symbols))
+                if df_1h.empty or len(df_1h) < 50:
+                    progress.progress((i+1)/len(ss_symbols))
                     continue
 
-                tlb_15m = detect_trendline(df_15m) if not df_15m.empty else {'breakout': 0, 'status': 'N/A', 'details': []}
-                tlb_1h = detect_trendline(df_1h) if not df_1h.empty else {'breakout': 0, 'status': 'N/A', 'details': []}
-                sweep_15m = detect_liquidity_sweep(df_15m) if not df_15m.empty else {'sweep': 0, 'status': 'N/A', 'details': []}
-                sweep_1h = detect_liquidity_sweep(df_1h) if not df_1h.empty else {'sweep': 0, 'status': 'N/A', 'details': []}
+                price_s = float(df_1h['close'].iloc[-1])
+                rsi_s = calc_rsi(df_1h)
+                macd_s = calc_macd(df_1h)
+                vp_s = calc_vp(df_1h)
+                absorb_s = calc_absorption(df_1h)
+                atr_s = calc_atr(df_1h)
+                funding_s = fetch_funding(sym)
+                cvd_df_s = fetch_cvd(ccy_scan, "CONTRACTS")
+                cvd_s = float(cvd_df_s['CVD'].iloc[-1]) if not cvd_df_s.empty else None
+                spot_cvd_df_s = fetch_cvd(ccy_scan, "SPOT")
+                spot_cvd_s = float(spot_cvd_df_s['CVD'].iloc[-1]) if not spot_cvd_df_s.empty else None
+                oi_df_s = fetch_oi(ccy_scan)
+                oi_ch_s = None
+                if not oi_df_s.empty and len(oi_df_s) > 1:
+                    oi_ch_s = ((oi_df_s['oi'].iloc[-1] - oi_df_s['oi'].iloc[0]) / oi_df_s['oi'].iloc[0]) * 100
 
-                # Determine match based on filter
-                if tf_filter == "15m Only":
-                    bull_match = tlb_15m['breakout'] == 1 or sweep_15m['sweep'] == 1
-                    bear_match = tlb_15m['breakout'] == -1 or sweep_15m['sweep'] == -1
-                    tf_detail = "15m"
-                elif tf_filter == "1H Only":
-                    bull_match = tlb_1h['breakout'] == 1 or sweep_1h['sweep'] == 1
-                    bear_match = tlb_1h['breakout'] == -1 or sweep_1h['sweep'] == -1
-                    tf_detail = "1H"
-                else:  # Both
-                    bull_match = (tlb_15m['breakout'] == 1 and tlb_1h['breakout'] == 1)
-                    bear_match = (tlb_15m['breakout'] == -1 and tlb_1h['breakout'] == -1)
-                    tf_detail = "15m+1H"
+                tf_s = {'15m': get_trend(df_15m), '1H': get_trend(df_1h), '4H': get_trend(df_4h)}
+                ms_s = detect_ms(df_1h)
+                obs_s = detect_obs(df_1h)
+                fvgs_s = detect_fvg(df_1h)
+                liqz_s = liq_zones(df_1h)
+                tlb_s = detect_trendline(df_1h)
+                sweep_s = detect_liquidity_sweep(df_1h)
 
-                row = scan_df[scan_df['symbol'] == sym].iloc[0]
+                sig_s = make_signal(price_s, rsi_s, macd_s, funding_s, cvd_s, spot_cvd_s, vp_s, absorb_s, oi_ch_s,
+                                    tf_s, ms_s, obs_s, fvgs_s, liqz_s, tlb_s, sweep_s, atr_s)
 
-                if bull_match:
-                    bull_results.append({
-                        'Symbol': sym, 'Price': f"${row['lastPrice']:,.4f}",
-                        '24h %': f"{row['riseFallRate']:+.2f}%",
-                        'Volume ($M)': f"{row['vol_m']:.1f}",
-                        'Timeframe': tf_detail,
-                        '15m': tlb_15m['status'][:25] + (' (Sweep!)' if sweep_15m['sweep'] == 1 else ''),
-                        '1H': tlb_1h['status'][:25] + (' (Sweep!)' if sweep_1h['sweep'] == 1 else '')
+                row_s = ss_df[ss_df['symbol'] == sym].iloc[0]
+
+                if sig_s['bull'] > ss_min_pts:
+                    buy_results.append({
+                        'Symbol': sym,
+                        'Price': f"${row_s['lastPrice']:,.4f}",
+                        '24h %': f"{row_s['riseFallRate']:+.2f}%",
+                        'Vol ($M)': f"{row_s['vol_m']:.1f}",
+                        'Signal': sig_s['signal'],
+                        'Bull Pts': sig_s['bull'],
+                        'Bear Pts': sig_s['bear'],
+                        'Entry': f"${sig_s['entry']:,.4f}",
+                        'SL': f"${sig_s['sl']:,.4f}" if sig_s['sl'] else '-',
+                        'TP1': f"${sig_s['tp1']:,.4f}" if sig_s['tp1'] else '-'
                     })
-                elif bear_match:
-                    bear_results.append({
-                        'Symbol': sym, 'Price': f"${row['lastPrice']:,.4f}",
-                        '24h %': f"{row['riseFallRate']:+.2f}%",
-                        'Volume ($M)': f"{row['vol_m']:.1f}",
-                        'Timeframe': tf_detail,
-                        '15m': tlb_15m['status'][:25] + (' (Sweep!)' if sweep_15m['sweep'] == -1 else ''),
-                        '1H': tlb_1h['status'][:25] + (' (Sweep!)' if sweep_1h['sweep'] == -1 else '')
+                elif sig_s['bear'] > ss_min_pts:
+                    sell_results.append({
+                        'Symbol': sym,
+                        'Price': f"${row_s['lastPrice']:,.4f}",
+                        '24h %': f"{row_s['riseFallRate']:+.2f}%",
+                        'Vol ($M)': f"{row_s['vol_m']:.1f}",
+                        'Signal': sig_s['signal'],
+                        'Bull Pts': sig_s['bull'],
+                        'Bear Pts': sig_s['bear'],
+                        'Entry': f"${sig_s['entry']:,.4f}",
+                        'SL': f"${sig_s['sl']:,.4f}" if sig_s['sl'] else '-',
+                        'TP1': f"${sig_s['tp1']:,.4f}" if sig_s['tp1'] else '-'
                     })
             except Exception:
                 pass
-            progress.progress((i+1)/len(scan_symbols))
+            progress.progress((i+1)/len(ss_symbols))
 
-        status.text(f"✅ Scan Complete! {len(scan_symbols)} coins scanned.")
+        status.text(f"✅ Scan Complete! {len(ss_symbols)} coins scanned.")
+
         st.markdown("---")
-        st.markdown(f"### 📊 Results: {len(bull_results)} Bullish | {len(bear_results)} Bearish")
+        st.markdown(f"### 📊 Strong Signals Found: {len(buy_results)} Bullish | {len(sell_results)} Bearish")
 
-        if bull_results:
-            st.subheader(f"🟢 Bullish ({len(bull_results)})")
-            st.dataframe(pd.DataFrame(bull_results), use_container_width=True, hide_index=True)
+        if buy_results:
+            st.subheader(f"🟢 Strong BUY Signals ({len(buy_results)})")
+            st.dataframe(pd.DataFrame(buy_results), use_container_width=True, hide_index=True)
         else:
-            st.info("Koi Bullish nahi mila.")
+            st.info("Koi Strong BUY signal nahi mila (Points > 8).")
 
-        if bear_results:
-            st.subheader(f"🔴 Bearish ({len(bear_results)})")
-            st.dataframe(pd.DataFrame(bear_results), use_container_width=True, hide_index=True)
+        if sell_results:
+            st.subheader(f"🔴 Strong SELL Signals ({len(sell_results)})")
+            st.dataframe(pd.DataFrame(sell_results), use_container_width=True, hide_index=True)
         else:
-            st.info("Koi Bearish nahi mila.")
+            st.info("Koi Strong SELL signal nahi mila (Points > 8).")
 
 st.markdown("---")
 
@@ -771,13 +680,12 @@ if not crow.empty:
     m1.metric("Price", f"${co['lastPrice']:,.4f}", f"{co['riseFallRate']:.2f}%")
     m2.metric("24h Volume", f"${co['volume24']:,.0f}")
     if vol_m < 20:
-        st.error(f"⚠️ **LOW VOLUME WARNING:** Sirf ${vol_m:.1f}M volume hai. $20M se kam volume wale coins mein bot ke signals reliable nahi hote. Trade mat karo.")
+        st.error(f"⚠️ **LOW VOLUME WARNING:** Sirf ${vol_m:.1f}M volume hai. Trade mat karo.")
 
-# Fetch all data
+# Fetch data
 klines_15m = fetch_klines(SYM, "Min15", 200)
 klines_1h = fetch_klines(SYM, "Min60", 200)
 klines_4h = fetch_klines(SYM, "Hour4", 200)
-spot_klines = fetch_spot_klines(ccy, "60m", 200)
 
 if klines_1h.empty:
     st.warning(f"{SYM} ka data nahi mila.")
@@ -790,10 +698,10 @@ vp = calc_vp(klines_1h)
 absorb = calc_absorption(klines_1h)
 atr = calc_atr(klines_1h)
 funding = fetch_funding(SYM)
-cvd_df = fetch_cvd(ccy)
+cvd_df = fetch_cvd(ccy, "CONTRACTS")
 cvd = float(cvd_df['CVD'].iloc[-1]) if not cvd_df.empty else None
-spot_cvd_df = fetch_spot_cvd(ccy)
-spot_cvd = float(spot_cvd_df['SpotCVD'].iloc[-1]) if not spot_cvd_df.empty else None
+spot_cvd_df = fetch_cvd(ccy, "SPOT")
+spot_cvd = float(spot_cvd_df['CVD'].iloc[-1]) if not spot_cvd_df.empty else None
 oi_df = fetch_oi(ccy)
 oi_ch = None
 if not oi_df.empty and len(oi_df) > 1:
@@ -823,10 +731,8 @@ chart = go.Figure(go.Bar(x=['BUY','SELL','HOLD'], y=[sig['bp'], sig['sp'], sig['
 chart.update_layout(height=220, template="plotly_dark", showlegend=False, yaxis_range=[0,100])
 st.plotly_chart(chart, use_container_width=True)
 
-if tlb['breakout'] != 0:
-    st.warning(f"⚠️ **{tlb['status']}**")
-if sweep['sweep'] != 0:
-    st.info(f"🎯 **{sweep['status']}**")
+if tlb['breakout'] != 0: st.warning(f"⚠️ **{tlb['status']}**")
+if sweep['sweep'] != 0: st.info(f"🎯 **{sweep['status']}**")
 
 f1, f2 = st.columns([1,1])
 with f1:
@@ -860,14 +766,10 @@ if spot_cvd is not None and cvd is not None:
     sf1, sf2 = st.columns(2)
     sf1.metric("Spot CVD", f"{spot_cvd:,.0f}")
     sf2.metric("Futures CVD", f"{cvd:,.0f}")
-    if spot_cvd > 0 and cvd < 0:
-        st.success("🟢 Spot buyers > Futures sellers → Bullish Divergence")
-    elif spot_cvd < 0 and cvd > 0:
-        st.error("🔴 Spot sellers > Futures buyers → Bearish Divergence")
-    else:
-        st.info("Spot aur Futures same direction mein hain.")
-else:
-    st.caption("Spot CVD data nahi mila is coin ke liye.")
+    if spot_cvd > 0 and cvd < 0: st.success("🟢 Bullish Divergence")
+    elif spot_cvd < 0 and cvd > 0: st.error("🔴 Bearish Divergence")
+    else: st.info("Same direction")
+else: st.caption("Spot CVD data nahi mila.")
 
 # MTF
 st.header("⏱️ MTF Trends")
@@ -881,7 +783,6 @@ st.header("📐 Trendline & Sweep")
 if tlb['breakout'] == 1: st.success(f"🟢 {tlb['status']}")
 elif tlb['breakout'] == -1: st.error(f"🔴 {tlb['status']}")
 else: st.info(f"⚪ {tlb['status']}")
-
 if sweep['sweep'] == 1: st.success(f"🟢 {sweep['status']}")
 elif sweep['sweep'] == -1: st.error(f"🔴 {sweep['status']}")
 else: st.info(f"⚪ {sweep['status']}")
@@ -889,11 +790,9 @@ else: st.info(f"⚪ {sweep['status']}")
 # SMC
 st.header("🏗️ Market Structure")
 st.info(f"**{ms['status']}**")
-
 if obs:
     ob_rows = [{"Type": o['type'], "Top": f"${o['top']:,.4f}", "Bottom": f"${o['bottom']:,.4f}"} for o in obs]
     st.dataframe(pd.DataFrame(ob_rows), use_container_width=True, hide_index=True)
-
 if fvgs:
     fvg_rows = [{"Type": f['type'], "Top": f"${f['top']:,.4f}", "Bottom": f"${f['bottom']:,.4f}"} for f in fvgs]
     st.dataframe(pd.DataFrame(fvg_rows), use_container_width=True, hide_index=True)
@@ -931,23 +830,17 @@ st.plotly_chart(fig, use_container_width=True)
 st.sidebar.markdown("---")
 st.sidebar.header("✅ Active Parameters")
 st.sidebar.markdown("""
-1. RSI
-2. MACD
-3. Funding Rate
-4. Futures CVD
-5. **Spot CVD** (NEW)
-6. **Spot/Futures Divergence** (NEW)
-7. Volume Profile
-8. Absorption
-9. Open Interest
-10. MTF Trend
+1. RSI, 2. MACD, 3. Funding
+4. Futures CVD, 5. Spot CVD
+6. Spot/Futures Divergence
+7. Volume Profile, 8. Absorption
+9. Open Interest, 10. MTF Trend
 11. Market Structure
-12. Order Blocks
-13. Fair Value Gaps
+12. Order Blocks, 13. FVG
 14. Liquidation Zones
 15. Trendline Breakout
-16. **Liquidity Sweep** (NEW)
+16. Liquidity Sweep
 17. Strong Buy/Sell Labels
-18. Scanner (15m/1H separate)
+18. **Strong Signal Scanner (>8 pts)**
 """)
 st.sidebar.button("🔄 Refresh", on_click=lambda: st.cache_data.clear())
